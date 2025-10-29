@@ -9,6 +9,11 @@ on:
         type: string
         default: 'https://github.com/your-org/your-repo.git'
 
+      base_model_run_id:
+        description: 'Run ID from base model workflow (find in URL: .../actions/runs/[RUN_ID])'
+        required: true
+        type: string
+
       base_model_artifact:
         description: 'Name of the base model artifact (e.g., "base-model-java")'
         required: true
@@ -51,15 +56,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Download base model
-        uses: actions/download-artifact@v4
+      - name: Download base model artifact
+        uses: dawidd6/action-download-artifact@v2
         with:
+          workflow: train-base-model.yaml
+          run_id: ${{ github.event.inputs.base_model_run_id }}
           name: ${{ github.event.inputs.base_model_artifact }}
           path: ./base_model
 
       - name: List downloaded files
         run: |
-          echo "📂 Downloaded base model files:"
+          echo "📂 Base model files:"
           ls -la ./base_model/
 
       - name: Extract repository name
