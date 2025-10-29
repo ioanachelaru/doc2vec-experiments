@@ -1,0 +1,93 @@
+name: Train Base Doc2Vec Model
+
+on:
+  workflow_dispatch:
+    inputs:
+      language:
+        description: 'Programming language for popular repos'
+        required: true
+        default: 'java'
+        type: choice
+        options:
+          - java
+          - python
+          - javascript
+          - typescript
+          - go
+          - rust
+          - cpp
+          - csharp
+
+      repo_count:
+        description: 'Number of popular repos to use for base model'
+        required: true
+        default: '10'
+        type: string
+
+      file_extensions:
+        description: 'File extensions (space-separated, e.g., ".java .scala")'
+        required: true
+        default: '.java'
+        type: string
+
+      vector_size:
+        description: 'Embedding dimension size'
+        required: false
+        default: '200'
+        type: string
+
+      epochs:
+        description: 'Training epochs'
+        required: false
+        default: '20'
+        type: string
+
+jobs:
+  train-base-model:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Fetch popular repositories
+        run: |
+          echo "🔍 Fetching top ${{ github.event.inputs.repo_count }} ${{ github.event.inputs.language }} repositories..."
+          python src/get_popular_repos.py \
+            --language "${{ github.event.inputs.language }}" \
+            --count "${{ github.event.inputs.repo_count }}" \
+            --output popular_repos.txt
+
+          echo "📋 Repository list:"
+          cat popular_repos.txt
+
+      - name: Train base model
+        run: |
+          echo "🚀 Training base model on popular repositories..."
+          python src/train_base_model.py \
+            --repos popular_repos.txt \
+            --ext ${{ github.event.inputs.file_extensions }} \
+            --output "base_model_${{ github.event.inputs.language }}.d2v" \
+            --vector-size ${{ github.event.inputs.vector_size }} \
+            --epochs ${{ github.event.inputs.epochs }}
+
+      - name: Upload base model and metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-model-${{ github.event.inputs.language }}
+          path: |
+            base_model_*.d2v
+            base_model_*.json
+            base_model_*.sample.csv
+            popular_repos.txt
+          retention-days: 90  # Keep for 90 days for fine-tuning

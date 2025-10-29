@@ -1,0 +1,101 @@
+name: Fine-tune Doc2Vec Model
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_url:
+        description: 'GitHub repository URL to analyze'
+        required: true
+        type: string
+        default: 'https://github.com/your-org/your-repo.git'
+
+      base_model_artifact:
+        description: 'Name of the base model artifact (e.g., "base-model-java")'
+        required: true
+        default: 'base-model-java'
+        type: string
+
+      file_extensions:
+        description: 'File extensions (space-separated, e.g., ".java .scala")'
+        required: true
+        default: '.java'
+        type: string
+
+      finetune_epochs:
+        description: 'Number of fine-tuning epochs'
+        required: false
+        default: '10'
+        type: string
+
+      update_vocab:
+        description: 'Update vocabulary with new words from target repo'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  finetune-and-embed:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download base model
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ github.event.inputs.base_model_artifact }}
+          path: ./base_model
+
+      - name: List downloaded files
+        run: |
+          echo "📂 Downloaded base model files:"
+          ls -la ./base_model/
+
+      - name: Extract repository name
+        id: repo_name
+        run: |
+          REPO_NAME=$(echo "${{ github.event.inputs.repo_url }}" | sed 's|.*/||; s|\.git$||')
+          echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
+          echo "📦 Repository name: ${REPO_NAME}"
+
+      - name: Fine-tune model and generate embeddings
+        run: |
+          # Find the base model file
+          BASE_MODEL=$(find ./base_model -name "*.d2v" | head -1)
+          echo "🔧 Using base model: $BASE_MODEL"
+
+          # Set vocab update flag
+          VOCAB_FLAG=""
+          if [ "${{ github.event.inputs.update_vocab }}" = "false" ]; then
+            VOCAB_FLAG="--no-vocab-update"
+          fi
+
+          # Run fine-tuning
+          python src/finetune_and_embed.py \
+            --repo "${{ github.event.inputs.repo_url }}" \
+            --base-model "$BASE_MODEL" \
+            --ext ${{ github.event.inputs.file_extensions }} \
+            --output "${{ steps.repo_name.outputs.repo_name }}" \
+            --epochs ${{ github.event.inputs.finetune_epochs }} \
+            $VOCAB_FLAG
+
+      - name: Upload embeddings and fine-tuned model
+        uses: actions/upload-artifact@v4
+        with:
+          name: finetuned-${{ steps.repo_name.outputs.repo_name }}
+          path: |
+            ${{ steps.repo_name.outputs.repo_name }}_embeddings.csv
+            ${{ steps.repo_name.outputs.repo_name }}_finetuned.d2v
+            ${{ steps.repo_name.outputs.repo_name }}_metadata.json
+          retention-days: 30
