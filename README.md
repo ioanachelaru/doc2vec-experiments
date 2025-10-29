@@ -125,9 +125,10 @@ doc2vec-experiments/
 │       ├── train-base-model.yaml    # Train base model on popular repos
 │       └── finetune-model.yaml      # Fine-tune model on specific repo
 ├── src/
-│   ├── train_base_model.py         # Train single model on multiple repos
-│   ├── finetune_and_embed.py       # Fine-tune model and generate embeddings
-│   └── get_popular_repos.py        # Fetch popular repos from GitHub API
+│   ├── train_base_model.py          # Train single model on multiple repos
+│   ├── finetune_and_embed.py        # Fine-tune model and generate embeddings
+│   ├── get_popular_repos.py         # Fetch popular repos from GitHub API
+│   └── utils.py                     # Shared utilities for all scripts
 ├── requirements.txt                 # Python dependencies
 └── README.md
 ```

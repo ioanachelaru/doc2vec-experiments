@@ -5,11 +5,7 @@ finetune_and_embed.py
 Fine-tune an existing Doc2Vec model on a new repository and generate embeddings.
 """
 
-import os
-import re
 import sys
-import subprocess
-import tempfile
 import shutil
 from pathlib import Path
 from tqdm import tqdm
@@ -18,81 +14,46 @@ from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 import argparse
 import json
 
-
-def clone_repo(github_url: str, dest_dir: str = None) -> Path:
-    """Clone a GitHub repository."""
-    if dest_dir is None:
-        dest_dir = tempfile.mkdtemp(prefix="repo_")
-    subprocess.run(["git", "clone", "--depth", "1", github_url, dest_dir], check=True)
-    print(f"✅ Repository cloned to: {dest_dir}")
-    return Path(dest_dir)
-
-
-def get_source_files(repo_path: Path, extensions: list[str]) -> list[Path]:
-    """Collect source files matching given extensions."""
-    files = []
-    for ext in extensions:
-        files.extend(repo_path.rglob(f"*{ext}"))
-    print(f"📄 Found {len(files)} source files ({', '.join(extensions)})")
-    return files
-
-
-def tokenize_code(code: str) -> list[str]:
-    """Simple regex-based code tokenizer."""
-    tokens = re.findall(r"[A-Za-z_][A-Za-z_0-9]*", code)
-    return [t.lower() for t in tokens if len(t) > 1]
-
-
-def prepare_documents(files: list[Path], repo_root: Path) -> list[TaggedDocument]:
-    """Prepare TaggedDocument objects for training."""
-    documents = []
-    for file_path in tqdm(files, desc="Tokenizing files"):
-        try:
-            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                tokens = tokenize_code(f.read())
-                if len(tokens) > 5:
-                    # Store relative path from repo root
-                    relative_path = file_path.relative_to(repo_root)
-                    documents.append(TaggedDocument(words=tokens, tags=[str(relative_path)]))
-        except Exception as e:
-            print(f"⚠️ Skipping {file_path}: {e}")
-    print(f"📚 Prepared {len(documents)} documents")
-    return documents
+from utils import (
+    clone_repo,
+    get_source_files,
+    prepare_documents
+)
 
 
 def load_base_model(model_path: str) -> Doc2Vec:
     """Load a pre-trained Doc2Vec model."""
-    print(f"📂 Loading base model from {model_path}")
+    print(f"Loading base model from {model_path}")
     model = Doc2Vec.load(model_path)
-    print(f"✅ Model loaded (vector_size={model.vector_size}, vocab_size={len(model.wv)})")
+    print(f"Model loaded (vector_size={model.vector_size}, vocab_size={len(model.wv)})")
     return model
 
 
 def finetune_model(
     model: Doc2Vec,
-    documents: list[TaggedDocument],
+    documents: list,
     epochs: int = 10,
     update_vocab: bool = True
 ) -> Doc2Vec:
     """Fine-tune the model on new documents."""
-    print(f"🔧 Fine-tuning model on {len(documents)} new documents...")
+    print(f"Fine-tuning model on {len(documents)} new documents...")
 
     if update_vocab:
         # Build vocabulary from new documents
-        print("📖 Updating vocabulary with new documents...")
+        print("Updating vocabulary with new documents...")
         model.build_vocab(documents, update=True)
 
     # Train on new documents
-    print(f"🚀 Training for {epochs} epochs...")
+    print(f"Training for {epochs} epochs...")
     model.train(documents, total_examples=len(documents), epochs=epochs)
 
-    print("✅ Fine-tuning complete")
+    print("Fine-tuning complete")
     return model
 
 
-def generate_embeddings(model: Doc2Vec, documents: list[TaggedDocument]) -> pd.DataFrame:
+def generate_embeddings(model: Doc2Vec, documents: list) -> pd.DataFrame:
     """Generate embeddings for all documents using the fine-tuned model."""
-    print("💾 Generating embeddings...")
+    print("Generating embeddings...")
     data = []
 
     for doc in tqdm(documents, desc="Generating embeddings"):
@@ -115,12 +76,12 @@ def save_outputs(
     # Save embeddings
     embeddings_path = f"{output_prefix}_embeddings.csv"
     embeddings_df.to_csv(embeddings_path, index=False)
-    print(f"📊 Embeddings saved to {embeddings_path}")
+    print(f"Embeddings saved to {embeddings_path}")
 
     # Save fine-tuned model
     model_path = f"{output_prefix}_finetuned.d2v"
     model.save(model_path)
-    print(f"💾 Fine-tuned model saved to {model_path}")
+    print(f"Fine-tuned model saved to {model_path}")
 
     # Save metadata
     metadata = {
@@ -134,7 +95,7 @@ def save_outputs(
     metadata_path = f"{output_prefix}_metadata.json"
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
-    print(f"📋 Metadata saved to {metadata_path}")
+    print(f"Metadata saved to {metadata_path}")
 
 
 def run_pipeline(
@@ -154,12 +115,12 @@ def run_pipeline(
     source_files = get_source_files(repo_dir, extensions)
 
     if not source_files:
-        print("❌ No source files found. Check your extensions or repo path.")
+        print("Error: No source files found. Check your extensions or repo path.")
         shutil.rmtree(repo_dir, ignore_errors=True)
         sys.exit(1)
 
-    # Prepare documents
-    documents = prepare_documents(source_files, repo_dir)
+    # Prepare documents (no tag prefix for fine-tuning, just relative paths)
+    documents = prepare_documents(source_files, repo_dir, tag_prefix=None)
 
     # Fine-tune model
     model = finetune_model(model, documents, epochs=finetune_epochs, update_vocab=update_vocab)
@@ -173,7 +134,7 @@ def run_pipeline(
     # Cleanup
     shutil.rmtree(repo_dir, ignore_errors=True)
 
-    print("🎉 Fine-tuning pipeline finished successfully!")
+    print("Fine-tuning pipeline finished successfully!")
 
 
 if __name__ == "__main__":
