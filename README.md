@@ -31,6 +31,8 @@ A GitHub Actions-powered pipeline for training Doc2Vec models on source code. Fe
 1. Go to **Actions** → **"Fine-tune Doc2Vec Model"**
 2. Configure:
    - **Repository URL**: Your target repository
+   - **Run ID**: Copy the run ID from the base model workflow URL
+     - Example: If base model URL is `.../actions/runs/1234567890`, use `1234567890`
    - **Base model artifact**: Name from Step 1 (e.g., `base-model-java`)
    - **File extensions**: Extensions to analyze
    - **Fine-tune epochs**: Training iterations (default: 10)
