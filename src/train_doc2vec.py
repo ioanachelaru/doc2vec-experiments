@@ -30,9 +30,6 @@ from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 import argparse
 
 
-# ----------------------------------------------------------
-# 1️⃣ CLONE REPOSITORY
-# ----------------------------------------------------------
 def clone_repo(github_url: str, dest_dir: str = None) -> Path:
     """Clone a GitHub repository."""
     if dest_dir is None:
@@ -42,9 +39,6 @@ def clone_repo(github_url: str, dest_dir: str = None) -> Path:
     return Path(dest_dir)
 
 
-# ----------------------------------------------------------
-# 2️⃣ EXTRACT SOURCE FILES
-# ----------------------------------------------------------
 def get_source_files(repo_path: Path, extensions: list[str]) -> list[Path]:
     """Collect source files matching given extensions."""
     files = []
@@ -54,19 +48,13 @@ def get_source_files(repo_path: Path, extensions: list[str]) -> list[Path]:
     return files
 
 
-# ----------------------------------------------------------
-# 3️⃣ TOKENIZE CODE
-# ----------------------------------------------------------
 def tokenize_code(code: str) -> list[str]:
     """Simple regex-based code tokenizer."""
     tokens = re.findall(r"[A-Za-z_][A-Za-z_0-9]*", code)
     return [t.lower() for t in tokens if len(t) > 1]
 
 
-# ----------------------------------------------------------
-# 4️⃣ PREPARE DOCUMENTS
-# ----------------------------------------------------------
-def prepare_documents(files: list[Path]) -> list[TaggedDocument]:
+def prepare_documents(files: list[Path], repo_root: Path) -> list[TaggedDocument]:
     """Prepare TaggedDocument objects for training."""
     documents = []
     for file_path in tqdm(files, desc="Tokenizing files"):
@@ -74,16 +62,15 @@ def prepare_documents(files: list[Path]) -> list[TaggedDocument]:
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                 tokens = tokenize_code(f.read())
                 if len(tokens) > 5:
-                    documents.append(TaggedDocument(words=tokens, tags=[str(file_path)]))
+                    # Store relative path from repo root instead of absolute path
+                    relative_path = file_path.relative_to(repo_root)
+                    documents.append(TaggedDocument(words=tokens, tags=[str(relative_path)]))
         except Exception as e:
             print(f"⚠️ Skipping {file_path}: {e}")
     print(f"📚 Prepared {len(documents)} documents for training")
     return documents
 
 
-# ----------------------------------------------------------
-# 5️⃣ TRAIN DOC2VEC MODEL
-# ----------------------------------------------------------
 def train_doc2vec(
     documents: list[TaggedDocument],
     vector_size: int = 200,
@@ -107,9 +94,6 @@ def train_doc2vec(
     return model
 
 
-# ----------------------------------------------------------
-# 6️⃣ EXPORT EMBEDDINGS
-# ----------------------------------------------------------
 def export_embeddings(model: Doc2Vec, documents: list[TaggedDocument], output_file: str) -> pd.DataFrame:
     """Infer and export embeddings to CSV."""
     print("💾 Exporting embeddings ...")
@@ -124,9 +108,6 @@ def export_embeddings(model: Doc2Vec, documents: list[TaggedDocument], output_fi
     return df
 
 
-# ----------------------------------------------------------
-# 7️⃣ MAIN PIPELINE
-# ----------------------------------------------------------
 def run_pipeline(github_url: str, extensions: list[str], output_file: str):
     repo_dir = clone_repo(github_url)
     source_files = get_source_files(repo_dir, extensions)
@@ -134,7 +115,7 @@ def run_pipeline(github_url: str, extensions: list[str], output_file: str):
         print("❌ No source files found. Check your extensions or repo path.")
         sys.exit(1)
 
-    documents = prepare_documents(source_files)
+    documents = prepare_documents(source_files, repo_dir)
     model = train_doc2vec(documents)
     export_embeddings(model, documents, output_file)
 
@@ -144,9 +125,6 @@ def run_pipeline(github_url: str, extensions: list[str], output_file: str):
     print("🎉 Pipeline finished successfully!")
 
 
-# ----------------------------------------------------------
-# 8️⃣ CLI ENTRYPOINT
-# ----------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train Doc2Vec on a GitHub repository.")
     parser.add_argument("--repo", required=True, help="GitHub repository URL")
