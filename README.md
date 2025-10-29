@@ -1,29 +1,41 @@
 # Doc2Vec Code Embeddings Pipeline
 
-A GitHub Actions-powered pipeline for training Doc2Vec models on source code from any GitHub repository. Automatically analyze popular repositories or specify custom ones to generate code embeddings for machine learning applications.
+A GitHub Actions-powered pipeline for training Doc2Vec models on source code. Features both base model training on popular repositories and fine-tuning capabilities for specific codebases.
 
 ## Features
 
-- **Automated Training**: GitHub Actions workflow for hands-free Doc2Vec training
-- **Popular Repos Discovery**: Automatically fetch and analyze the most popular GitHub repositories by language
-- **Multi-Repository Support**: Process multiple repositories in a single workflow run
+- **Two-Stage Training**: Train a base model on popular repos, then fine-tune on your specific codebase
+- **Base Model Training**: Build robust representations from top GitHub repositories
+- **Fine-Tuning Pipeline**: Adapt pre-trained models to your specific repository
+- **Popular Repos Discovery**: Automatically fetch the most popular repositories by language
 - **Language Agnostic**: Support for any programming language (Java, Python, JavaScript, etc.)
-- **Code Tokenization**: Smart tokenization of source code for better embeddings
-- **Export Options**: Generate both CSV embeddings and trained Doc2Vec models
+- **Smart Embeddings**: Generate embeddings using models trained on relevant codebases
 
 ## Quick Start
 
-### Via GitHub Actions (Recommended)
+### Two-Stage Approach
 
-1. Fork this repository
-2. Go to the **Actions** tab
-3. Select **"Train Doc2Vec Model"**
-4. Click **"Run workflow"**
-5. Choose your options:
-   - **Repository source**: `popular` (auto-fetch) or `custom` (your URLs)
-   - **Language**: `java`, `python`, `javascript`, etc.
-   - **Number of repos**: How many popular repos to analyze (if using popular mode)
-   - **File extensions**: `.java`, `.py`, `.js`, etc.
+#### Step 1: Train Base Model on Popular Repositories
+
+1. Go to **Actions** → **"Train Base Doc2Vec Model"**
+2. Configure:
+   - **Language**: Select the programming language (java, python, etc.)
+   - **Repository count**: Number of top repos to use (default: 10)
+   - **File extensions**: Extensions to analyze (e.g., `.java`)
+   - **Vector size**: Embedding dimensions (default: 200)
+3. Run workflow and wait for completion
+4. Note the artifact name (e.g., `base-model-java`)
+
+#### Step 2: Fine-tune on Your Repository
+
+1. Go to **Actions** → **"Fine-tune Doc2Vec Model"**
+2. Configure:
+   - **Repository URL**: Your target repository
+   - **Base model artifact**: Name from Step 1 (e.g., `base-model-java`)
+   - **File extensions**: Extensions to analyze
+   - **Fine-tune epochs**: Training iterations (default: 10)
+3. Run workflow to generate embeddings for your repository
+
 
 ### Local Usage
 
@@ -33,57 +45,57 @@ git clone https://github.com/yourusername/doc2vec-experiments.git
 cd doc2vec-experiments
 
 # Install dependencies
-pip install gensim pandas tqdm scikit-learn requests
+pip install -r requirements.txt
 
-# Train on a single repository
-python src/train_doc2vec.py \
-    --repo https://github.com/apache/spark.git \
-    --ext .java .scala \
-    --output spark_embeddings.csv
-
-# Get popular repositories
+# Step 1: Get popular repositories
 python src/get_popular_repos.py \
-    --language python \
+    --language java \
     --count 10 \
-    --output popular_python_repos.txt
+    --output popular_repos.txt
+
+# Step 2: Train base model on popular repos
+python src/train_base_model.py \
+    --repos popular_repos.txt \
+    --ext .java \
+    --output base_model.d2v \
+    --vector-size 200 \
+    --epochs 20
+
+# Step 3: Fine-tune on your repository
+python src/finetune_and_embed.py \
+    --repo https://github.com/your-org/your-repo.git \
+    --base-model base_model.d2v \
+    --ext .java \
+    --output your_repo \
+    --epochs 10
 ```
 
-## Workflow Options
+## Workflows Available
 
-### Analyzing Popular Repositories
+### 1. Train Base Model (`train-base-model.yaml`)
+- Trains a Doc2Vec model on multiple popular repositories
+- Creates a robust base representation for code
+- Outputs: base model, metadata, sample embeddings
 
-The workflow can automatically fetch the most popular repositories from GitHub:
-
-- **Languages supported**: java, python, javascript, go, rust, typescript, etc.
-- **Ranking criteria**: Star count, recent activity (last 5 years)
-- **Default**: Top 10 repositories with 1000+ stars
-
-Example: To analyze the top 10 Python projects:
-1. Repository source: `popular`
-2. Language: `python`
-3. Number of repos: `10`
-4. File extensions: `.py`
-
-### Custom Repository List
-
-Provide your own list of repositories to analyze:
-
-1. Repository source: `custom`
-2. Enter URLs (one per line):
-   ```
-   https://github.com/tensorflow/tensorflow.git
-   https://github.com/pytorch/pytorch.git
-   https://github.com/scikit-learn/scikit-learn.git
-   ```
+### 2. Fine-tune Model (`finetune-model.yaml`)
+- Takes a pre-trained base model
+- Fine-tunes it on your specific repository
+- Generates embeddings optimized for your codebase
+- Outputs: embeddings CSV, fine-tuned model, metadata
 
 ## Output Files
 
-For each repository, the pipeline generates:
+### Base Model Training
+- **`base_model_{language}.d2v`**: Trained Doc2Vec model
+- **`base_model_{language}.json`**: Training metadata (repos used, parameters)
+- **`base_model_{language}.sample.csv`**: Sample embeddings for validation
 
+### Fine-tuning
 - **`{repo_name}_embeddings.csv`**: Document vectors for each source file
-  - Column 1: Repository-relative file path (e.g., `src/main/java/MyClass.java`)
+  - Column 1: Repository-relative file path
   - Columns 2-201: 200-dimensional embedding vectors
-- **`{repo_name}_embeddings.model`**: Trained Doc2Vec model for inference
+- **`{repo_name}_finetuned.d2v`**: Fine-tuned Doc2Vec model
+- **`{repo_name}_metadata.json`**: Fine-tuning metadata
 
 ## Doc2Vec Configuration
 
@@ -108,10 +120,14 @@ Default training parameters:
 doc2vec-experiments/
 ├── .github/
 │   └── workflows/
-│       └── doc2vec-train.yaml    # GitHub Actions workflow
+│       ├── train-base-model.yaml    # Train base model on popular repos
+│       └── finetune-model.yaml      # Fine-tune model on specific repo
 ├── src/
-│   ├── train_doc2vec.py          # Main training pipeline
-│   └── get_popular_repos.py      # Fetch popular repos from GitHub
+│   ├── train_base_model.py         # Train single model on multiple repos
+│   ├── finetune_and_embed.py       # Fine-tune model and generate embeddings
+│   ├── get_popular_repos.py        # Fetch popular repos from GitHub API
+│   └── train_doc2vec.py            # Original single-repo training script
+├── requirements.txt                 # Python dependencies
 └── README.md
 ```
 
