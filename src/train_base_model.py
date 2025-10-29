@@ -7,61 +7,20 @@ This model can later be fine-tuned on specific repositories.
 """
 
 import os
-import re
 import sys
-import subprocess
-import tempfile
 import shutil
 from pathlib import Path
-from tqdm import tqdm
 import pandas as pd
-from gensim.models.doc2vec import Doc2Vec, TaggedDocument
+from gensim.models.doc2vec import Doc2Vec
 import argparse
 import json
 
-
-def clone_repo(github_url: str, dest_dir: str = None) -> Path:
-    """Clone a GitHub repository."""
-    if dest_dir is None:
-        dest_dir = tempfile.mkdtemp(prefix="repo_")
-    subprocess.run(["git", "clone", "--depth", "1", github_url, dest_dir], check=True)
-    print(f"✅ Repository cloned to: {dest_dir}")
-    return Path(dest_dir)
-
-
-def get_source_files(repo_path: Path, extensions: list[str]) -> list[Path]:
-    """Collect source files matching given extensions."""
-    files = []
-    for ext in extensions:
-        files.extend(repo_path.rglob(f"*{ext}"))
-    print(f"📄 Found {len(files)} source files ({', '.join(extensions)})")
-    return files
-
-
-def tokenize_code(code: str) -> list[str]:
-    """Simple regex-based code tokenizer."""
-    tokens = re.findall(r"[A-Za-z_][A-Za-z_0-9]*", code)
-    return [t.lower() for t in tokens if len(t) > 1]
-
-
-def prepare_documents_from_repo(repo_url: str, files: list[Path], repo_root: Path) -> list[TaggedDocument]:
-    """Prepare TaggedDocument objects for training from a single repo."""
-    documents = []
-    repo_name = repo_url.split("/")[-1].replace(".git", "")
-
-    for file_path in tqdm(files, desc=f"Tokenizing {repo_name}"):
-        try:
-            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                tokens = tokenize_code(f.read())
-                if len(tokens) > 5:
-                    # Tag includes repo name and relative path
-                    relative_path = file_path.relative_to(repo_root)
-                    tag = f"{repo_name}/{relative_path}"
-                    documents.append(TaggedDocument(words=tokens, tags=[tag]))
-        except Exception as e:
-            print(f"⚠️ Skipping {file_path}: {e}")
-
-    return documents
+from utils import (
+    clone_repo,
+    get_source_files,
+    prepare_documents,
+    get_repo_name_from_url
+)
 
 
 def train_base_model(
@@ -80,19 +39,20 @@ def train_base_model(
 
     # Process each repository
     for repo_url in repo_urls:
-        print(f"\n🔍 Processing repository: {repo_url}")
+        print(f"\nProcessing repository: {repo_url}")
         repo_dir = clone_repo(repo_url)
         temp_dirs.append(repo_dir)
 
         source_files = get_source_files(repo_dir, extensions)
         if source_files:
-            documents = prepare_documents_from_repo(repo_url, source_files, repo_dir)
+            repo_name = get_repo_name_from_url(repo_url)
+            documents = prepare_documents(source_files, repo_dir, tag_prefix=repo_name)
             all_documents.extend(documents)
-            print(f"📚 Added {len(documents)} documents from {repo_url}")
+            print(f"Added {len(documents)} documents from {repo_url}")
         else:
-            print(f"⚠️ No source files found in {repo_url}")
+            print(f"Warning: No source files found in {repo_url}")
 
-    print(f"\n🚀 Training base model on {len(all_documents)} total documents...")
+    print(f"\nTraining base model on {len(all_documents)} total documents...")
 
     # Train the model
     model = Doc2Vec(
@@ -109,15 +69,15 @@ def train_base_model(
     for temp_dir in temp_dirs:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-    print("✅ Base model training complete")
+    print("Base model training complete")
     return model, all_documents
 
 
-def save_model_and_metadata(model: Doc2Vec, documents: list[TaggedDocument], output_path: str, repo_urls: list[str]):
+def save_model_and_metadata(model: Doc2Vec, documents: list, output_path: str, repo_urls: list[str]):
     """Save the model and metadata about training repos."""
     # Save the model
     model.save(output_path)
-    print(f"💾 Model saved to {output_path}")
+    print(f"Model saved to {output_path}")
 
     # Save metadata
     metadata = {
@@ -133,16 +93,16 @@ def save_model_and_metadata(model: Doc2Vec, documents: list[TaggedDocument], out
     metadata_path = Path(output_path).with_suffix(".json")
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
-    print(f"📋 Metadata saved to {metadata_path}")
+    print(f"Metadata saved to {metadata_path}")
 
     # Save sample embeddings from base model
     sample_df = export_sample_embeddings(model, documents[:100])  # First 100 docs as sample
     sample_path = Path(output_path).with_suffix(".sample.csv")
     sample_df.to_csv(sample_path, index=False)
-    print(f"📊 Sample embeddings saved to {sample_path}")
+    print(f"Sample embeddings saved to {sample_path}")
 
 
-def export_sample_embeddings(model: Doc2Vec, documents: list[TaggedDocument]) -> pd.DataFrame:
+def export_sample_embeddings(model: Doc2Vec, documents: list) -> pd.DataFrame:
     """Export sample embeddings to CSV."""
     data = []
     for doc in documents:
@@ -176,10 +136,10 @@ if __name__ == "__main__":
     elif args.repo_urls:
         repo_urls = args.repo_urls
     else:
-        print("❌ Please provide repository URLs via --repos file or --repo-urls")
+        print("Error: Please provide repository URLs via --repos file or --repo-urls")
         sys.exit(1)
 
-    print(f"🎯 Training base model on {len(repo_urls)} repositories")
+    print(f"Training base model on {len(repo_urls)} repositories")
 
     model, documents = train_base_model(
         repo_urls,
@@ -189,4 +149,4 @@ if __name__ == "__main__":
     )
 
     save_model_and_metadata(model, documents, args.output, repo_urls)
-    print("🎉 Base model training pipeline finished successfully!")
+    print("Base model training pipeline finished successfully!")

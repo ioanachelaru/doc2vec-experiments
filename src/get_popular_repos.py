@@ -51,7 +51,7 @@ def get_popular_repos(language="java", count=10, min_stars=1000):
             repo_name = item["full_name"]
             stars = item["stargazers_count"]
 
-            print(f"✓ {repo_name} ({stars:,} stars)")
+            print(f"{repo_name} ({stars:,} stars)")
             repos.append(repo_url)
 
         return repos
@@ -70,23 +70,23 @@ def main():
 
     args = parser.parse_args()
 
-    print(f"🔍 Fetching top {args.count} {args.language} repositories...")
+    print(f"Fetching top {args.count} {args.language} repositories...")
     repos = get_popular_repos(args.language, args.count, args.min_stars)
 
     if repos:
-        print(f"\n📊 Found {len(repos)} repositories")
+        print(f"\nFound {len(repos)} repositories")
 
         if args.output:
             with open(args.output, "w") as f:
                 for repo in repos:
                     f.write(repo + "\n")
-            print(f"💾 Saved to {args.output}")
+            print(f"Saved to {args.output}")
         else:
-            print("\n🔗 Repository URLs:")
+            print("\nRepository URLs:")
             for repo in repos:
                 print(repo)
     else:
-        print("❌ No repositories found")
+        print("Error: No repositories found")
 
 
 if __name__ == "__main__":
