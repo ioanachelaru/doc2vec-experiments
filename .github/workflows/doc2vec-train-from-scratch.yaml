@@ -1,0 +1,101 @@
+name: Train Doc2Vec Model
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_source:
+        description: 'Repository source'
+        required: true
+        default: 'popular'
+        type: choice
+        options:
+          - popular
+          - custom
+      
+      repo_urls:
+        description: 'Custom repository URLs (one per line) - only used if "custom" is selected'
+        required: false
+        default: |
+          https://github.com/apache/calcite.git
+          https://github.com/apache/ant-ivy.git
+        type: string
+      
+      language:
+        description: 'Language for popular repos (e.g., java, python, javascript)'
+        required: false
+        default: 'java'
+        type: string
+      
+      repo_count:
+        description: 'Number of popular repos to analyze (max 30)'
+        required: false
+        default: '10'
+        type: string
+      
+      file_extensions:
+        description: 'File extensions to include (space-separated, e.g., ".java .scala")'
+        required: false
+        default: '.java'
+        type: string
+
+jobs:
+  train-doc2vec:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Get repository list
+        id: get_repos
+        run: |
+          if [ "${{ github.event.inputs.repo_source }}" == "popular" ]; then
+            echo "Fetching top ${{ github.event.inputs.repo_count }} popular ${{ github.event.inputs.language }} repositories..."
+            python src/get_popular_repos.py \
+              --language "${{ github.event.inputs.language }}" \
+              --count "${{ github.event.inputs.repo_count }}" \
+              --output repos.txt
+          else
+            echo "Using custom repository list..."
+            echo "${{ github.event.inputs.repo_urls }}" > repos.txt
+          fi
+
+          echo "Repository list:"
+          cat repos.txt
+
+      - name: Run Doc2Vec training pipeline for each repository
+        run: |
+          # Process each repository URL
+          while IFS= read -r repo_url; do
+            # Skip empty lines
+            [ -z "$repo_url" ] && continue
+
+            # Extract repo name from URL for output filename
+            repo_name=$(echo "$repo_url" | sed 's|.*/||; s|\.git$||')
+
+            echo "Processing repository: $repo_url"
+            echo "Output will be saved as: ${repo_name}_embeddings.csv"
+
+            python src/train_doc2vec.py \
+              --repo "$repo_url" \
+              --ext ${{ github.event.inputs.file_extensions }} \
+              --output "${repo_name}_embeddings.csv"
+          done < repos.txt
+
+      - name: Upload trained model & embeddings
+        uses: actions/upload-artifact@v4
+        with:
+          name: doc2vec-model-and-embeddings
+          path: |
+            *.model
+            *.csv
