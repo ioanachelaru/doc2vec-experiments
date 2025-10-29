@@ -125,8 +125,7 @@ doc2vec-experiments/
 ├── src/
 │   ├── train_base_model.py         # Train single model on multiple repos
 │   ├── finetune_and_embed.py       # Fine-tune model and generate embeddings
-│   ├── get_popular_repos.py        # Fetch popular repos from GitHub API
-│   └── train_doc2vec.py            # Original single-repo training script
+│   └── get_popular_repos.py        # Fetch popular repos from GitHub API
 ├── requirements.txt                 # Python dependencies
 └── README.md
 ```
