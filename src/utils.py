@@ -13,12 +13,38 @@ from tqdm import tqdm
 from gensim.models.doc2vec import TaggedDocument
 
 
-def clone_repo(github_url: str, dest_dir: str = None) -> Path:
-    """Clone a GitHub repository."""
+def clone_repo(github_url: str, dest_dir: str = None, version: str = None) -> Path:
+    """Clone a GitHub repository and optionally checkout a specific version.
+
+    Args:
+        github_url: The GitHub repository URL
+        dest_dir: Optional destination directory
+        version: Optional commit SHA, tag, or branch to checkout
+
+    Returns:
+        Path to the cloned repository
+    """
     if dest_dir is None:
         dest_dir = tempfile.mkdtemp(prefix="repo_")
-    subprocess.run(["git", "clone", "--depth", "1", github_url, dest_dir], check=True)
-    print(f"Repository cloned to: {dest_dir}")
+
+    # Clone the repository
+    if version:
+        # Full clone when checking out specific version
+        subprocess.run(["git", "clone", github_url, dest_dir], check=True)
+        print(f"Repository cloned to: {dest_dir}")
+
+        # Checkout the specific version
+        subprocess.run(
+            ["git", "checkout", version],
+            cwd=dest_dir,
+            check=True
+        )
+        print(f"Checked out version: {version}")
+    else:
+        # Shallow clone for latest version (faster)
+        subprocess.run(["git", "clone", "--depth", "1", github_url, dest_dir], check=True)
+        print(f"Repository cloned to: {dest_dir}")
+
     return Path(dest_dir)
 
 
