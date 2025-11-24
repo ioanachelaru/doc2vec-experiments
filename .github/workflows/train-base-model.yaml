@@ -19,9 +19,9 @@ on:
           - csharp
 
       repo_count:
-        description: 'Number of popular repos to use for base model'
+        description: 'Number of popular repos to use for base model (max 1k)'
         required: true
-        default: '10'
+        default: '100'
         type: string
 
       file_extensions:
@@ -42,9 +42,28 @@ on:
         default: '20'
         type: string
 
+      min_stars:
+        description: 'Minimum stars for repo selection (auto-adjusted for large counts)'
+        required: false
+        default: '500'
+        type: string
+
+      batch_size:
+        description: 'Number of repos to process per batch'
+        required: false
+        default: '20'
+        type: string
+
+      parallel_workers:
+        description: 'Number of parallel workers for processing'
+        required: false
+        default: '4'
+        type: string
+
 jobs:
   train-base-model:
     runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours max for large training jobs
 
     steps:
       - name: Checkout repository
@@ -55,39 +74,119 @@ jobs:
         with:
           python-version: '3.10'
 
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Calculate optimal parameters
+        id: params
+        run: |
+          # Auto-adjust min_stars based on repo count
+          REPO_COUNT=${{ github.event.inputs.repo_count }}
+          MIN_STARS=${{ github.event.inputs.min_stars }}
+
+          if [ "$REPO_COUNT" -gt 200 ]; then
+            MIN_STARS=$((MIN_STARS / 2))
+          fi
+          if [ "$REPO_COUNT" -gt 400 ]; then
+            MIN_STARS=$((MIN_STARS / 4))
+          fi
+
+          # Ensure minimum threshold
+          if [ "$MIN_STARS" -lt 50 ]; then
+            MIN_STARS=50
+          fi
+
+          echo "min_stars=${MIN_STARS}" >> $GITHUB_OUTPUT
+          echo "📊 Adjusted parameters:"
+          echo "   Repo count: $REPO_COUNT"
+          echo "   Min stars: $MIN_STARS"
+          echo "   Batch size: ${{ github.event.inputs.batch_size }}"
+          echo "   Parallel workers: ${{ github.event.inputs.parallel_workers }}"
+
       - name: Fetch popular repositories
         run: |
           echo "🔍 Fetching top ${{ github.event.inputs.repo_count }} ${{ github.event.inputs.language }} repositories..."
+          echo "   Minimum stars: ${{ steps.params.outputs.min_stars }}"
+
           python src/get_popular_repos.py \
             --language "${{ github.event.inputs.language }}" \
             --count "${{ github.event.inputs.repo_count }}" \
+            --min-stars "${{ steps.params.outputs.min_stars }}" \
             --output popular_repos.txt
 
-          echo "📋 Repository list:"
-          cat popular_repos.txt
+          echo "📋 Repository list summary:"
+          echo "   Total repos: $(wc -l < popular_repos.txt)"
+          echo "   First 5 repos:"
+          head -5 popular_repos.txt
+          echo "   ..."
+          echo "   Last 5 repos:"
+          tail -5 popular_repos.txt
+
+      - name: Setup swap space for large training
+        if: ${{ github.event.inputs.repo_count > 100 }}
+        run: |
+          echo "🔧 Setting up additional swap space for large dataset..."
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          sudo swapon --show
 
       - name: Train base model
         run: |
-          echo "🚀 Training base model on popular repositories..."
+          echo "🚀 Training base model on ${{ github.event.inputs.repo_count }} repositories..."
+          echo "   This may take several hours for large datasets"
+
           python src/train_base_model.py \
             --repos popular_repos.txt \
             --ext ${{ github.event.inputs.file_extensions }} \
-            --output "base_model_${{ github.event.inputs.language }}.d2v" \
+            --output "base_model_${{ github.event.inputs.language }}_${{ github.event.inputs.repo_count }}repos.d2v" \
             --vector-size ${{ github.event.inputs.vector_size }} \
-            --epochs ${{ github.event.inputs.epochs }}
+            --epochs ${{ github.event.inputs.epochs }} \
+            --batch-size ${{ github.event.inputs.batch_size }} \
+            --parallel-workers ${{ github.event.inputs.parallel_workers }}
+
+      - name: Generate training report
+        if: always()
+        run: |
+          echo "📈 Training Report" > training_report.txt
+          echo "==================" >> training_report.txt
+          echo "" >> training_report.txt
+          echo "Configuration:" >> training_report.txt
+          echo "  Language: ${{ github.event.inputs.language }}" >> training_report.txt
+          echo "  Repo count: ${{ github.event.inputs.repo_count }}" >> training_report.txt
+          echo "  Min stars: ${{ steps.params.outputs.min_stars }}" >> training_report.txt
+          echo "  Vector size: ${{ github.event.inputs.vector_size }}" >> training_report.txt
+          echo "  Epochs: ${{ github.event.inputs.epochs }}" >> training_report.txt
+          echo "  Batch size: ${{ github.event.inputs.batch_size }}" >> training_report.txt
+          echo "  Parallel workers: ${{ github.event.inputs.parallel_workers }}" >> training_report.txt
+          echo "" >> training_report.txt
+
+          if [ -f "base_model_${{ github.event.inputs.language }}_${{ github.event.inputs.repo_count }}repos.json" ]; then
+            echo "Model metadata:" >> training_report.txt
+            python -c "import json; data=json.load(open('base_model_${{ github.event.inputs.language }}_${{ github.event.inputs.repo_count }}repos.json')); print(f'  Total documents: {data.get(\"total_documents\", \"N/A\")}'); print(f'  Unique repos: {data.get(\"unique_repos\", \"N/A\")}')" >> training_report.txt
+          fi
+
+          cat training_report.txt
 
       - name: Upload base model and metadata
         uses: actions/upload-artifact@v4
         with:
-          name: base-model-${{ github.event.inputs.language }}
+          name: base-model-${{ github.event.inputs.language }}-${{ github.event.inputs.repo_count }}repos
           path: |
             base_model_*.d2v
             base_model_*.json
             base_model_*.sample.csv
             popular_repos.txt
+            training_report.txt
           retention-days: 90  # Keep for 90 days for fine-tuning

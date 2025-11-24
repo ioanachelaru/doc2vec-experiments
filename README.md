@@ -20,7 +20,7 @@ A GitHub Actions-powered pipeline for training Doc2Vec models on source code. Fe
 1. Go to **Actions** → **"Train Base Doc2Vec Model"**
 2. Configure:
    - **Language**: Select the programming language (java, python, etc.)
-   - **Repository count**: Number of top repos to use (default: 10)
+   - **Repository count**: Number of top repos to use (default: 100, max: 1000)
    - **File extensions**: Extensions to analyze (e.g., `.java`)
    - **Vector size**: Embedding dimensions (default: 200)
 3. Run workflow and wait for completion
@@ -31,11 +31,15 @@ A GitHub Actions-powered pipeline for training Doc2Vec models on source code. Fe
 1. Go to **Actions** → **"Fine-tune Doc2Vec Model"**
 2. Configure:
    - **Repository URL**: Your target repository
+   - **Repository version** (optional): Specific commit SHA, tag, or branch to analyze
+     - Leave empty for latest code
+     - Examples: `v1.0.0`, `main`, `abc123def`
    - **Run ID**: Copy the run ID from the base model workflow URL
      - Example: If base model URL is `.../actions/runs/1234567890`, use `1234567890`
-   - **Base model artifact**: Name from Step 1 (e.g., `base-model-java`)
+   - **Base model artifact**: Name from Step 1 (e.g., `base-model-java-100repos`)
    - **File extensions**: Extensions to analyze
    - **Fine-tune epochs**: Training iterations (default: 10)
+   - **Update vocabulary**: Whether to add new words from target repo (default: true)
 3. Run workflow to generate embeddings for your repository
 
 
@@ -49,10 +53,11 @@ cd doc2vec-experiments
 # Install dependencies
 pip install -r requirements.txt
 
-# Step 1: Get popular repositories
+# Step 1: Get popular repositories (max 1000 due to GitHub API limits)
 python src/get_popular_repos.py \
     --language java \
-    --count 10 \
+    --count 100 \
+    --min-stars 1000 \
     --output popular_repos.txt
 
 # Step 2: Train base model on popular repos
@@ -69,7 +74,8 @@ python src/finetune_and_embed.py \
     --base-model base_model.d2v \
     --ext .java \
     --output your_repo \
-    --epochs 10
+    --epochs 10 \
+    --version v1.0.0  # Optional: specific version to analyze
 ```
 
 ## Workflows Available
@@ -88,16 +94,21 @@ python src/finetune_and_embed.py \
 ## Output Files
 
 ### Base Model Training
-- **`base_model_{language}.d2v`**: Trained Doc2Vec model
-- **`base_model_{language}.json`**: Training metadata (repos used, parameters)
-- **`base_model_{language}.sample.csv`**: Sample embeddings for validation
+- **`base_model_{language}_{count}repos.d2v`**: Trained Doc2Vec model
+- **`base_model_{language}_{count}repos.json`**: Training metadata (repos used, parameters)
+- **`base_model_{language}_{count}repos.sample.csv`**: Sample embeddings for validation
+- **`popular_repos.txt`**: List of repository URLs used for training
 
 ### Fine-tuning
 - **`{repo_name}_embeddings.csv`**: Document vectors for each source file
   - Column 1: Repository-relative file path
-  - Columns 2-201: 200-dimensional embedding vectors
+  - Columns 2-201: 200-dimensional embedding vectors (or as configured)
 - **`{repo_name}_finetuned.d2v`**: Fine-tuned Doc2Vec model
-- **`{repo_name}_metadata.json`**: Fine-tuning metadata
+- **`{repo_name}_metadata.json`**: Fine-tuning metadata including:
+  - Base model used
+  - Repository URL and version (if specified)
+  - Total documents processed
+  - Vector size and vocabulary size
 
 ## Doc2Vec Configuration
 
@@ -137,6 +148,19 @@ doc2vec-experiments/
 
 - Python 3.10+
 - Dependencies: `gensim`, `pandas`, `tqdm`, `scikit-learn`, `requests`
+- Git (for repository cloning)
+
+## Limitations
+
+- **GitHub API Rate Limits**:
+  - Maximum 1000 repositories per search query due to GitHub Search API limitations
+  - To train on more repos, consider lowering `min_stars` parameter or using different date ranges
+- **Processing Time**:
+  - Training on hundreds of repositories can take several hours
+  - GitHub Actions has a 6-hour timeout for workflows
+- **Memory Usage**:
+  - Large models with many repositories require significant RAM
+  - The workflow automatically sets up swap space for large training jobs
 
 ## Contributing
 

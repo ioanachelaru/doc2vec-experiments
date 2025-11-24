@@ -15,7 +15,7 @@ def get_popular_repos(language="java", count=10, min_stars=1000):
 
     Args:
         language: Programming language to filter by (e.g., "java", "python", "javascript")
-        count: Number of repositories to fetch
+        count: Number of repositories to fetch (can be > 100, will paginate)
         min_stars: Minimum number of stars required
 
     Returns:
@@ -27,38 +27,58 @@ def get_popular_repos(language="java", count=10, min_stars=1000):
     # Create date for repos created in last 5 years (to get actively maintained ones)
     date_threshold = (datetime.now() - timedelta(days=5*365)).strftime("%Y-%m-%d")
 
-    # Query parameters
-    params = {
-        "q": f"language:{language} stars:>{min_stars} created:>{date_threshold}",
-        "sort": "stars",
-        "order": "desc",
-        "per_page": count
-    }
-
     headers = {
         "Accept": "application/vnd.github.v3+json"
     }
 
-    try:
-        response = requests.get(url, params=params, headers=headers)
-        response.raise_for_status()
+    repos = []
+    remaining = count
+    page = 1
 
-        data = response.json()
-        repos = []
+    # GitHub API limits to 100 items per page and 1000 total results
+    while remaining > 0 and len(repos) < count and page <= 10:
+        per_page = min(100, remaining)
 
-        for item in data.get("items", []):
-            repo_url = item["clone_url"]
-            repo_name = item["full_name"]
-            stars = item["stargazers_count"]
+        # Query parameters
+        params = {
+            "q": f"language:{language} stars:>{min_stars} created:>{date_threshold}",
+            "sort": "stars",
+            "order": "desc",
+            "per_page": per_page,
+            "page": page
+        }
 
-            print(f"{repo_name} ({stars:,} stars)")
-            repos.append(repo_url)
+        try:
+            response = requests.get(url, params=params, headers=headers)
+            response.raise_for_status()
 
-        return repos
+            data = response.json()
+            items = data.get("items", [])
 
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching repositories: {e}")
-        return []
+            if not items:
+                break
+
+            for item in items[:remaining]:
+                repo_url = item["clone_url"]
+                repo_name = item["full_name"]
+                stars = item["stargazers_count"]
+
+                print(f"{len(repos)+1:3d}. {repo_name} ({stars:,} stars)")
+                repos.append(repo_url)
+
+            remaining -= len(items)
+            page += 1
+
+            # Add a small delay to be respectful to GitHub API
+            if remaining > 0:
+                import time
+                time.sleep(1)
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching repositories (page {page}): {e}")
+            break
+
+    return repos
 
 
 def main():

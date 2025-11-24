@@ -9,6 +9,12 @@ on:
         type: string
         default: 'https://github.com/your-org/your-repo.git'
 
+      repo_version:
+        description: 'Specific version to checkout (commit SHA, tag, or branch). Leave empty for latest'
+        required: false
+        type: string
+        default: ''
+
       base_model_run_id:
         description: 'Run ID from base model workflow (find in URL: .../actions/runs/[RUN_ID])'
         required: true
@@ -66,7 +72,7 @@ jobs:
 
       - name: List downloaded files
         run: |
-          echo "📂 Base model files:"
+          echo "Base model files:"
           ls -la ./base_model/
 
       - name: Extract repository name
@@ -74,18 +80,25 @@ jobs:
         run: |
           REPO_NAME=$(echo "${{ github.event.inputs.repo_url }}" | sed 's|.*/||; s|\.git$||')
           echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
-          echo "📦 Repository name: ${REPO_NAME}"
+          echo "Repository name: ${REPO_NAME}"
 
       - name: Fine-tune model and generate embeddings
         run: |
           # Find the base model file
           BASE_MODEL=$(find ./base_model -name "*.d2v" | head -1)
-          echo "🔧 Using base model: $BASE_MODEL"
+          echo "Using base model: $BASE_MODEL"
 
           # Set vocab update flag
           VOCAB_FLAG=""
           if [ "${{ github.event.inputs.update_vocab }}" = "false" ]; then
             VOCAB_FLAG="--no-vocab-update"
+          fi
+
+          # Set version flag if provided
+          VERSION_FLAG=""
+          if [ -n "${{ github.event.inputs.repo_version }}" ]; then
+            VERSION_FLAG="--version ${{ github.event.inputs.repo_version }}"
+            echo "Using version: ${{ github.event.inputs.repo_version }}"
           fi
 
           # Run fine-tuning
@@ -95,7 +108,8 @@ jobs:
             --ext ${{ github.event.inputs.file_extensions }} \
             --output "${{ steps.repo_name.outputs.repo_name }}" \
             --epochs ${{ github.event.inputs.finetune_epochs }} \
-            $VOCAB_FLAG
+            $VOCAB_FLAG \
+            $VERSION_FLAG
 
       - name: Upload embeddings and fine-tuned model
         uses: actions/upload-artifact@v4

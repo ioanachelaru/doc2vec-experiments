@@ -70,7 +70,8 @@ def save_outputs(
     embeddings_df: pd.DataFrame,
     output_prefix: str,
     repo_url: str,
-    base_model_path: str
+    base_model_path: str,
+    version: str = None
 ):
     """Save the fine-tuned model, embeddings, and metadata."""
     # Save embeddings
@@ -92,6 +93,9 @@ def save_outputs(
         "vocab_size": len(model.wv)
     }
 
+    if version:
+        metadata["version"] = version
+
     metadata_path = f"{output_prefix}_metadata.json"
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
@@ -104,14 +108,15 @@ def run_pipeline(
     extensions: list[str],
     output_prefix: str,
     finetune_epochs: int = 10,
-    update_vocab: bool = True
+    update_vocab: bool = True,
+    version: str = None
 ):
     """Run the complete fine-tuning and embedding pipeline."""
     # Load base model
     model = load_base_model(base_model_path)
 
     # Clone and process repository
-    repo_dir = clone_repo(repo_url)
+    repo_dir = clone_repo(repo_url, version=version)
     source_files = get_source_files(repo_dir, extensions)
 
     if not source_files:
@@ -129,7 +134,7 @@ def run_pipeline(
     embeddings_df = generate_embeddings(model, documents)
 
     # Save outputs
-    save_outputs(model, embeddings_df, output_prefix, repo_url, base_model_path)
+    save_outputs(model, embeddings_df, output_prefix, repo_url, base_model_path, version)
 
     # Cleanup
     shutil.rmtree(repo_dir, ignore_errors=True)
@@ -145,6 +150,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", default="finetuned", help="Output prefix for files")
     parser.add_argument("--epochs", type=int, default=10, help="Fine-tuning epochs")
     parser.add_argument("--no-vocab-update", action="store_true", help="Don't update vocabulary")
+    parser.add_argument("--version", help="Specific version (commit SHA, tag, or branch) to checkout")
 
     args = parser.parse_args()
 
@@ -154,5 +160,6 @@ if __name__ == "__main__":
         args.ext,
         args.output,
         finetune_epochs=args.epochs,
-        update_vocab=not args.no_vocab_update
+        update_vocab=not args.no_vocab_update,
+        version=args.version
     )

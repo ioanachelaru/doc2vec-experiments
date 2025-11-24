@@ -14,6 +14,9 @@ import pandas as pd
 from gensim.models.doc2vec import Doc2Vec
 import argparse
 import json
+import time
+from multiprocessing import Pool, cpu_count
+import traceback
 
 from utils import (
     clone_repo,
@@ -21,6 +24,30 @@ from utils import (
     prepare_documents,
     get_repo_name_from_url
 )
+
+
+def process_repository(args):
+    """Process a single repository and return documents."""
+    repo_url, extensions = args
+    try:
+        print(f"Processing: {repo_url}")
+        repo_dir = clone_repo(repo_url)
+
+        source_files = get_source_files(repo_dir, extensions)
+        documents = []
+        if source_files:
+            repo_name = get_repo_name_from_url(repo_url)
+            documents = prepare_documents(source_files, repo_dir, tag_prefix=repo_name)
+            print(f"✓ Added {len(documents)} documents from {repo_url}")
+        else:
+            print(f"⚠ No source files found in {repo_url}")
+
+        # Cleanup immediately to save disk space
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        return documents
+    except Exception as e:
+        print(f"✗ Error processing {repo_url}: {e}")
+        return []
 
 
 def train_base_model(
@@ -31,45 +58,86 @@ def train_base_model(
     min_count: int = 3,
     epochs: int = 20,
     dm: int = 1,
+    batch_size: int = 10,
+    parallel_workers: int = None,
 ) -> Doc2Vec:
-    """Train a base Doc2Vec model on multiple repositories."""
+    """Train a base Doc2Vec model on multiple repositories.
+
+    Args:
+        repo_urls: List of repository URLs to train on
+        extensions: File extensions to include
+        vector_size: Embedding dimension
+        window: Context window size
+        min_count: Minimum word frequency
+        epochs: Training epochs
+        dm: Training algorithm (1=PV-DM, 0=PV-DBOW)
+        batch_size: Number of repos to process before incremental training
+        parallel_workers: Number of parallel workers for repo processing
+    """
 
     all_documents = []
-    temp_dirs = []
 
-    # Process each repository
-    for repo_url in repo_urls:
-        print(f"\nProcessing repository: {repo_url}")
-        repo_dir = clone_repo(repo_url)
-        temp_dirs.append(repo_dir)
+    # Determine number of parallel workers
+    if parallel_workers is None:
+        parallel_workers = min(4, cpu_count() or 1)
 
-        source_files = get_source_files(repo_dir, extensions)
-        if source_files:
-            repo_name = get_repo_name_from_url(repo_url)
-            documents = prepare_documents(source_files, repo_dir, tag_prefix=repo_name)
-            all_documents.extend(documents)
-            print(f"Added {len(documents)} documents from {repo_url}")
-        else:
-            print(f"Warning: No source files found in {repo_url}")
+    print(f"\nProcessing {len(repo_urls)} repositories with {parallel_workers} parallel workers...")
+    print(f"Batch size: {batch_size} repos per training batch\n")
 
-    print(f"\nTraining base model on {len(all_documents)} total documents...")
+    # Process repositories in batches to manage memory
+    model = None
+    total_processed = 0
 
-    # Train the model
-    model = Doc2Vec(
-        all_documents,
-        vector_size=vector_size,
-        window=window,
-        min_count=min_count,
-        epochs=epochs,
-        dm=dm,
-        workers=os.cpu_count() or 2,
-    )
+    for batch_start in range(0, len(repo_urls), batch_size):
+        batch_end = min(batch_start + batch_size, len(repo_urls))
+        batch_repos = repo_urls[batch_start:batch_end]
 
-    # Cleanup temp directories
-    for temp_dir in temp_dirs:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        print(f"\n{'='*60}")
+        print(f"Processing batch {batch_start//batch_size + 1} (repos {batch_start+1}-{batch_end}/{len(repo_urls)})")
+        print(f"{'='*60}")
 
-    print("Base model training complete")
+        # Process batch in parallel
+        batch_documents = []
+        with Pool(processes=parallel_workers) as pool:
+            args_list = [(repo, extensions) for repo in batch_repos]
+            results = pool.map(process_repository, args_list)
+
+            for docs in results:
+                batch_documents.extend(docs)
+
+        all_documents.extend(batch_documents)
+        total_processed += len(batch_repos)
+
+        print(f"\nBatch complete: {len(batch_documents)} documents from {len(batch_repos)} repos")
+        print(f"Total progress: {total_processed}/{len(repo_urls)} repos processed")
+        print(f"Total documents so far: {len(all_documents)}")
+
+        # For very large datasets, consider incremental training
+        if len(all_documents) > 10000 and model is not None:
+            print("Performing incremental training on current batch...")
+            model.build_vocab(batch_documents, update=True)
+            model.train(batch_documents, total_examples=len(batch_documents), epochs=model.epochs)
+
+    print(f"\n{'='*60}")
+    print(f"Training final model on {len(all_documents)} total documents...")
+    print(f"{'='*60}")
+
+    # Train the model (or create if first time)
+    if model is None:
+        model = Doc2Vec(
+            all_documents,
+            vector_size=vector_size,
+            window=window,
+            min_count=min_count,
+            epochs=epochs,
+            dm=dm,
+            workers=cpu_count() or 2,
+        )
+    else:
+        # Final training on all documents
+        model.train(all_documents, total_examples=len(all_documents), epochs=epochs//2)
+
+    print("\n✅ Base model training complete")
     return model, all_documents
 
 
@@ -127,6 +195,9 @@ if __name__ == "__main__":
     parser.add_argument("--output", default="base_model.d2v", help="Output model file")
     parser.add_argument("--vector-size", type=int, default=200, help="Embedding dimension")
     parser.add_argument("--epochs", type=int, default=20, help="Training epochs")
+    parser.add_argument("--batch-size", type=int, default=10, help="Number of repos to process per batch")
+    parser.add_argument("--parallel-workers", type=int, help="Number of parallel workers (default: auto)")
+    parser.add_argument("--max-repos", type=int, help="Maximum number of repos to process (for testing)")
 
     args = parser.parse_args()
 
@@ -139,14 +210,33 @@ if __name__ == "__main__":
         print("Error: Please provide repository URLs via --repos file or --repo-urls")
         sys.exit(1)
 
-    print(f"Training base model on {len(repo_urls)} repositories")
+    # Limit repos if requested (useful for testing)
+    if args.max_repos:
+        repo_urls = repo_urls[:args.max_repos]
+
+    print(f"   Starting base model training")
+    print(f"   Repositories: {len(repo_urls)}")
+    print(f"   Extensions: {args.ext}")
+    print(f"   Vector size: {args.vector_size}")
+    print(f"   Epochs: {args.epochs}")
+    print(f"   Batch size: {args.batch_size}")
+    print(f"   Output: {args.output}\n")
+
+    start_time = time.time()
 
     model, documents = train_base_model(
         repo_urls,
         args.ext,
         vector_size=args.vector_size,
-        epochs=args.epochs
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        parallel_workers=args.parallel_workers
     )
 
     save_model_and_metadata(model, documents, args.output, repo_urls)
-    print("Base model training pipeline finished successfully!")
+
+    elapsed_time = time.time() - start_time
+    print(f"   Base model training pipeline finished successfully!")
+    print(f"   Total time: {elapsed_time/60:.1f} minutes")
+    print(f"   Documents processed: {len(documents)}")
+    print(f"   Model saved to: {args.output}")
