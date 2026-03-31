@@ -18,6 +18,12 @@ on:
           - cpp
           - csharp
 
+      organization:
+        description: 'GitHub organization to fetch repos from (e.g., "apache"). Leave empty for general popular repos.'
+        required: false
+        default: ''
+        type: string
+
       repo_count:
         description: 'Number of popular repos to use for base model (max 1k)'
         required: true
@@ -115,14 +121,23 @@ jobs:
 
       - name: Fetch popular repositories
         run: |
-          echo "🔍 Fetching top ${{ github.event.inputs.repo_count }} ${{ github.event.inputs.language }} repositories..."
-          echo "   Minimum stars: ${{ steps.params.outputs.min_stars }}"
-
-          python src/get_popular_repos.py \
-            --language "${{ github.event.inputs.language }}" \
-            --count "${{ github.event.inputs.repo_count }}" \
-            --min-stars "${{ steps.params.outputs.min_stars }}" \
-            --output popular_repos.txt
+          ORG="${{ github.event.inputs.organization }}"
+          if [ -n "$ORG" ]; then
+            echo "🔍 Fetching top ${{ github.event.inputs.repo_count }} ${{ github.event.inputs.language }} repositories from $ORG..."
+            python src/get_popular_repos.py \
+              --language "${{ github.event.inputs.language }}" \
+              --count "${{ github.event.inputs.repo_count }}" \
+              --org "$ORG" \
+              --output popular_repos.txt
+          else
+            echo "🔍 Fetching top ${{ github.event.inputs.repo_count }} ${{ github.event.inputs.language }} repositories..."
+            echo "   Minimum stars: ${{ steps.params.outputs.min_stars }}"
+            python src/get_popular_repos.py \
+              --language "${{ github.event.inputs.language }}" \
+              --count "${{ github.event.inputs.repo_count }}" \
+              --min-stars "${{ steps.params.outputs.min_stars }}" \
+              --output popular_repos.txt
+          fi
 
           echo "📋 Repository list summary:"
           echo "   Total repos: $(wc -l < popular_repos.txt)"
@@ -164,6 +179,7 @@ jobs:
           echo "" >> training_report.txt
           echo "Configuration:" >> training_report.txt
           echo "  Language: ${{ github.event.inputs.language }}" >> training_report.txt
+          echo "  Organization: ${{ github.event.inputs.organization || 'N/A (general popular repos)' }}" >> training_report.txt
           echo "  Repo count: ${{ github.event.inputs.repo_count }}" >> training_report.txt
           echo "  Min stars: ${{ steps.params.outputs.min_stars }}" >> training_report.txt
           echo "  Vector size: ${{ github.event.inputs.vector_size }}" >> training_report.txt

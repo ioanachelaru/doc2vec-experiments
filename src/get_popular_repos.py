@@ -9,14 +9,15 @@ import argparse
 from datetime import datetime, timedelta
 
 
-def get_popular_repos(language="java", count=10, min_stars=1000):
+def get_popular_repos(language="java", count=10, min_stars=1000, org=None):
     """
     Fetch popular GitHub repositories using the GitHub API.
 
     Args:
         language: Programming language to filter by (e.g., "java", "python", "javascript")
         count: Number of repositories to fetch (can be > 100, will paginate)
-        min_stars: Minimum number of stars required
+        min_stars: Minimum number of stars required (ignored when org is specified)
+        org: GitHub organization to filter by (e.g., "apache")
 
     Returns:
         List of repository URLs
@@ -35,13 +36,20 @@ def get_popular_repos(language="java", count=10, min_stars=1000):
     remaining = count
     page = 1
 
+    # Build query based on whether org is specified
+    if org:
+        query = f"org:{org} language:{language}"
+        print(f"Searching for {language} repos in organization: {org}")
+    else:
+        query = f"language:{language} stars:>{min_stars} created:>{date_threshold}"
+
     # GitHub API limits to 100 items per page and 1000 total results
     while remaining > 0 and len(repos) < count and page <= 10:
         per_page = min(100, remaining)
 
         # Query parameters
         params = {
-            "q": f"language:{language} stars:>{min_stars} created:>{date_threshold}",
+            "q": query,
             "sort": "stars",
             "order": "desc",
             "per_page": per_page,
@@ -86,12 +94,16 @@ def main():
     parser.add_argument("--language", default="java", help="Programming language filter")
     parser.add_argument("--count", type=int, default=10, help="Number of repos to fetch")
     parser.add_argument("--min-stars", type=int, default=1000, help="Minimum stars required")
+    parser.add_argument("--org", help="GitHub organization to filter (e.g., 'apache')")
     parser.add_argument("--output", help="Output file to save repo URLs")
 
     args = parser.parse_args()
 
-    print(f"Fetching top {args.count} {args.language} repositories...")
-    repos = get_popular_repos(args.language, args.count, args.min_stars)
+    if args.org:
+        print(f"Fetching top {args.count} {args.language} repositories from {args.org}...")
+    else:
+        print(f"Fetching top {args.count} {args.language} repositories...")
+    repos = get_popular_repos(args.language, args.count, args.min_stars, args.org)
 
     if repos:
         print(f"\nFound {len(repos)} repositories")
