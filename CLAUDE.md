@@ -53,7 +53,7 @@ python src/finetune_and_embed.py --repo <url> --base-model base_model.d2v --ext 
 ### Constraints
 - GitHub API: max 1000 repos per search query
 - GitHub Actions: 6-hour workflow timeout
-- Memory: Apache repos are huge (e.g., netbeans = 39k files). Swap is always enabled now.
+- Memory: Apache repos are huge (e.g., netbeans = 39k files). Swap enabled via `/swapfile2` (runners already have `/swapfile`).
 - Gensim models: Doc2Vec saves multiple files (.d2v + .npy), must upload all with `base_model_*`
 - `*_repos.txt` files are gitignored (generated output, regenerate as needed)
 
