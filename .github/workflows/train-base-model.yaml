@@ -199,9 +199,7 @@ jobs:
         with:
           name: base-model-${{ github.event.inputs.language }}-${{ github.event.inputs.repo_count }}repos
           path: |
-            base_model_*.d2v
-            base_model_*.json
-            base_model_*.sample.csv
+            base_model_*
             popular_repos.txt
             training_report.txt
           retention-days: 90  # Keep for 90 days for fine-tuning

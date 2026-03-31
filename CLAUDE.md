@@ -1,6 +1,7 @@
 # Doc2Vec Code Embeddings Pipeline
 
 > **Note:** Always update this file when making changes to the project.
+> **Commits:** Use `git commit -s` (signoff) and no Co-Authored-By lines.
 
 ## Project Overview
 A GitHub Actions-powered pipeline for training Doc2Vec models on source code. Uses a two-stage approach: train a base model on popular repositories, then fine-tune on specific codebases.
@@ -53,6 +54,7 @@ python src/finetune_and_embed.py --repo <url> --base-model base_model.d2v --ext 
 - GitHub API: max 1000 repos per search query
 - GitHub Actions: 6-hour workflow timeout
 - Memory: Apache repos are huge (e.g., netbeans = 39k files). Swap is always enabled now.
+- Gensim models: Doc2Vec saves multiple files (.d2v + .npy), must upload all with `base_model_*`
 - `*_repos.txt` files are gitignored (generated output, regenerate as needed)
 
 ### Analyzing Duplicates
