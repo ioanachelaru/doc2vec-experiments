@@ -21,7 +21,7 @@ on:
       organization:
         description: 'GitHub organization to fetch repos from (e.g., "apache"). Leave empty for general popular repos.'
         required: false
-        default: ''
+        default: 'apache'
         type: string
 
       repo_count:
@@ -148,9 +148,8 @@ jobs:
           tail -5 popular_repos.txt
 
       - name: Setup swap space for large training
-        if: ${{ github.event.inputs.repo_count > 100 }}
         run: |
-          echo "🔧 Setting up additional swap space for large dataset..."
+          echo "🔧 Setting up additional swap space..."
           sudo fallocate -l 8G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
