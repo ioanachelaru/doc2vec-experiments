@@ -48,7 +48,7 @@ python src/finetune_and_embed.py --repo <url> --base-model base_model.d2v --ext 
 - `.github/workflows/finetune-model.yaml` - Fine-tune, embed, analyze duplicates, and post Gist
   - Inputs: `duplicate_threshold` (default 0.99), `post_gist` (default true)
   - Automatically runs duplicate analysis after embedding
-  - Posts results to public GitHub Gist for easy sharing
+  - Posts results to public GitHub Gist (requires `GIST_TOKEN` secret with `gist` scope)
 
 ### Constraints
 - GitHub API: max 1000 repos per search query
