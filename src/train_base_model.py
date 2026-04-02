@@ -75,25 +75,29 @@ def train_base_model(
         parallel_workers: Number of parallel workers for repo processing
     """
 
-    all_documents = []
+    # Keep only sample documents for metadata (not all - saves memory)
+    sample_documents = []
+    total_document_count = 0
 
     # Determine number of parallel workers
     if parallel_workers is None:
         parallel_workers = min(4, cpu_count() or 1)
 
     print(f"\nProcessing {len(repo_urls)} repositories with {parallel_workers} parallel workers...")
-    print(f"Batch size: {batch_size} repos per training batch\n")
+    print(f"Batch size: {batch_size} repos per training batch")
+    print(f"Training incrementally after each batch to save memory\n")
 
-    # Process repositories in batches to manage memory
+    # Process repositories in batches with incremental training
     model = None
     total_processed = 0
 
     for batch_start in range(0, len(repo_urls), batch_size):
         batch_end = min(batch_start + batch_size, len(repo_urls))
         batch_repos = repo_urls[batch_start:batch_end]
+        batch_num = batch_start // batch_size + 1
 
         print(f"\n{'='*60}")
-        print(f"Processing batch {batch_start//batch_size + 1} (repos {batch_start+1}-{batch_end}/{len(repo_urls)})")
+        print(f"Processing batch {batch_num} (repos {batch_start+1}-{batch_end}/{len(repo_urls)})")
         print(f"{'='*60}")
 
         # Process batch in parallel
@@ -105,43 +109,58 @@ def train_base_model(
             for docs in results:
                 batch_documents.extend(docs)
 
-        all_documents.extend(batch_documents)
+        if not batch_documents:
+            print(f"⚠ No documents in batch {batch_num}, skipping...")
+            continue
+
         total_processed += len(batch_repos)
+        total_document_count += len(batch_documents)
+
+        # Keep first 100 documents for sample embeddings
+        if len(sample_documents) < 100:
+            sample_documents.extend(batch_documents[:100 - len(sample_documents)])
 
         print(f"\nBatch complete: {len(batch_documents)} documents from {len(batch_repos)} repos")
         print(f"Total progress: {total_processed}/{len(repo_urls)} repos processed")
-        print(f"Total documents so far: {len(all_documents)}")
+        print(f"Total documents so far: {total_document_count}")
 
-        # For very large datasets, consider incremental training
-        if len(all_documents) > 10000 and model is not None:
-            print("Performing incremental training on current batch...")
+        # Incremental training
+        if model is None:
+            # First batch: create model and train
+            print(f"Creating model and training on first batch...")
+            model = Doc2Vec(
+                batch_documents,
+                vector_size=vector_size,
+                window=window,
+                min_count=min_count,
+                epochs=epochs,
+                dm=dm,
+                workers=cpu_count() or 2,
+            )
+            print(f"✓ Model created with vocab size: {len(model.wv)}")
+        else:
+            # Subsequent batches: update vocab and train incrementally
+            print(f"Updating vocabulary and training on batch {batch_num}...")
+            old_vocab_size = len(model.wv)
             model.build_vocab(batch_documents, update=True)
-            model.train(batch_documents, total_examples=len(batch_documents), epochs=model.epochs)
+            new_vocab_size = len(model.wv)
+            print(f"  Vocab: {old_vocab_size} → {new_vocab_size} (+{new_vocab_size - old_vocab_size} words)")
+            model.train(batch_documents, total_examples=len(batch_documents), epochs=epochs)
+            print(f"✓ Trained on {len(batch_documents)} documents")
+
+        # Clear batch documents to free memory
+        del batch_documents
 
     print(f"\n{'='*60}")
-    print(f"Training final model on {len(all_documents)} total documents...")
+    print(f"✅ Base model training complete")
+    print(f"   Total documents: {total_document_count}")
+    print(f"   Final vocab size: {len(model.wv)}")
     print(f"{'='*60}")
 
-    # Train the model (or create if first time)
-    if model is None:
-        model = Doc2Vec(
-            all_documents,
-            vector_size=vector_size,
-            window=window,
-            min_count=min_count,
-            epochs=epochs,
-            dm=dm,
-            workers=cpu_count() or 2,
-        )
-    else:
-        # Final training on all documents
-        model.train(all_documents, total_examples=len(all_documents), epochs=epochs//2)
-
-    print("\n✅ Base model training complete")
-    return model, all_documents
+    return model, sample_documents, total_document_count
 
 
-def save_model_and_metadata(model: Doc2Vec, documents: list, output_path: str, repo_urls: list[str]):
+def save_model_and_metadata(model: Doc2Vec, sample_documents: list, total_document_count: int, output_path: str, repo_urls: list[str]):
     """Save the model and metadata about training repos."""
     # Save the model
     model.save(output_path)
@@ -150,12 +169,13 @@ def save_model_and_metadata(model: Doc2Vec, documents: list, output_path: str, r
     # Save metadata
     metadata = {
         "training_repos": repo_urls,
-        "total_documents": len(documents),
+        "total_documents": total_document_count,
         "vector_size": model.vector_size,
         "window": model.window,
         "min_count": model.min_count,
         "training_epochs": model.epochs,
-        "unique_repos": len(set(doc.tags[0].split("/")[0] for doc in documents))
+        "vocab_size": len(model.wv),
+        "unique_repos": len(set(doc.tags[0].split("/")[0] for doc in sample_documents)) if sample_documents else 0
     }
 
     metadata_path = Path(output_path).with_suffix(".json")
@@ -164,7 +184,7 @@ def save_model_and_metadata(model: Doc2Vec, documents: list, output_path: str, r
     print(f"Metadata saved to {metadata_path}")
 
     # Save sample embeddings from base model
-    sample_df = export_sample_embeddings(model, documents[:100])  # First 100 docs as sample
+    sample_df = export_sample_embeddings(model, sample_documents)  # Use saved sample docs
     sample_path = Path(output_path).with_suffix(".sample.csv")
     sample_df.to_csv(sample_path, index=False)
     print(f"Sample embeddings saved to {sample_path}")
@@ -224,7 +244,7 @@ if __name__ == "__main__":
 
     start_time = time.time()
 
-    model, documents = train_base_model(
+    model, sample_documents, total_document_count = train_base_model(
         repo_urls,
         args.ext,
         vector_size=args.vector_size,
@@ -233,10 +253,10 @@ if __name__ == "__main__":
         parallel_workers=args.parallel_workers
     )
 
-    save_model_and_metadata(model, documents, args.output, repo_urls)
+    save_model_and_metadata(model, sample_documents, total_document_count, args.output, repo_urls)
 
     elapsed_time = time.time() - start_time
     print(f"   Base model training pipeline finished successfully!")
     print(f"   Total time: {elapsed_time/60:.1f} minutes")
-    print(f"   Documents processed: {len(documents)}")
+    print(f"   Documents processed: {total_document_count}")
     print(f"   Model saved to: {args.output}")
