@@ -53,7 +53,7 @@ python src/finetune_and_embed.py --repo <url> --base-model base_model.d2v --ext 
 ### Constraints
 - GitHub API: max 1000 repos per search query
 - GitHub Actions: 6-hour workflow timeout
-- Memory: Uses incremental batch training - trains after each batch, not all at once. Use `--batch-size 3` for memory-constrained environments.
+- Memory: Uses sub-batch training - splits large document sets into chunks of `--max-docs-per-batch 5000` to avoid OOM.
 - Gensim models: Doc2Vec saves multiple files (.d2v + .npy), must upload all with `base_model_*`
 - `*_repos.txt` files are gitignored (generated output, regenerate as needed)
 

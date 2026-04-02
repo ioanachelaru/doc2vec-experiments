@@ -59,6 +59,7 @@ def train_base_model(
     epochs: int = 20,
     dm: int = 1,
     batch_size: int = 10,
+    max_docs_per_batch: int = 5000,
     parallel_workers: int = None,
 ) -> Doc2Vec:
     """Train a base Doc2Vec model on multiple repositories.
@@ -72,6 +73,7 @@ def train_base_model(
         epochs: Training epochs
         dm: Training algorithm (1=PV-DM, 0=PV-DBOW)
         batch_size: Number of repos to process before incremental training
+        max_docs_per_batch: Maximum documents per training sub-batch (memory limit)
         parallel_workers: Number of parallel workers for repo processing
     """
 
@@ -84,8 +86,9 @@ def train_base_model(
         parallel_workers = min(4, cpu_count() or 1)
 
     print(f"\nProcessing {len(repo_urls)} repositories with {parallel_workers} parallel workers...")
-    print(f"Batch size: {batch_size} repos per training batch")
-    print(f"Training incrementally after each batch to save memory\n")
+    print(f"Batch size: {batch_size} repos per batch")
+    print(f"Max documents per training batch: {max_docs_per_batch}")
+    print(f"Training incrementally in sub-batches to save memory\n")
 
     # Process repositories in batches with incremental training
     model = None
@@ -124,29 +127,40 @@ def train_base_model(
         print(f"Total progress: {total_processed}/{len(repo_urls)} repos processed")
         print(f"Total documents so far: {total_document_count}")
 
-        # Incremental training
-        if model is None:
-            # First batch: create model and train
-            print(f"Creating model and training on first batch...")
-            model = Doc2Vec(
-                batch_documents,
-                vector_size=vector_size,
-                window=window,
-                min_count=min_count,
-                epochs=epochs,
-                dm=dm,
-                workers=cpu_count() or 2,
-            )
-            print(f"✓ Model created with vocab size: {len(model.wv)}")
-        else:
-            # Subsequent batches: update vocab and train incrementally
-            print(f"Updating vocabulary and training on batch {batch_num}...")
-            old_vocab_size = len(model.wv)
-            model.build_vocab(batch_documents, update=True)
-            new_vocab_size = len(model.wv)
-            print(f"  Vocab: {old_vocab_size} → {new_vocab_size} (+{new_vocab_size - old_vocab_size} words)")
-            model.train(batch_documents, total_examples=len(batch_documents), epochs=epochs)
-            print(f"✓ Trained on {len(batch_documents)} documents")
+        # Sub-batch documents for memory efficiency
+        num_sub_batches = (len(batch_documents) + max_docs_per_batch - 1) // max_docs_per_batch
+        print(f"Training in {num_sub_batches} sub-batch(es) of max {max_docs_per_batch} docs each...")
+
+        for sub_idx in range(0, len(batch_documents), max_docs_per_batch):
+            sub_batch = batch_documents[sub_idx:sub_idx + max_docs_per_batch]
+            sub_num = sub_idx // max_docs_per_batch + 1
+
+            if model is None:
+                # First sub-batch ever: create model and train
+                print(f"  Sub-batch {sub_num}/{num_sub_batches}: Creating model with {len(sub_batch)} docs...")
+                model = Doc2Vec(
+                    sub_batch,
+                    vector_size=vector_size,
+                    window=window,
+                    min_count=min_count,
+                    epochs=epochs,
+                    dm=dm,
+                    workers=cpu_count() or 2,
+                )
+                print(f"  ✓ Model created with vocab size: {len(model.wv)}")
+            else:
+                # Subsequent sub-batches: update vocab and train incrementally
+                print(f"  Sub-batch {sub_num}/{num_sub_batches}: Training on {len(sub_batch)} docs...")
+                old_vocab_size = len(model.wv)
+                model.build_vocab(sub_batch, update=True)
+                new_vocab_size = len(model.wv)
+                if new_vocab_size > old_vocab_size:
+                    print(f"    Vocab: {old_vocab_size} → {new_vocab_size} (+{new_vocab_size - old_vocab_size})")
+                model.train(sub_batch, total_examples=len(sub_batch), epochs=epochs)
+                print(f"  ✓ Trained")
+
+            # Clear sub-batch to free memory
+            del sub_batch
 
         # Clear batch documents to free memory
         del batch_documents
@@ -216,6 +230,7 @@ if __name__ == "__main__":
     parser.add_argument("--vector-size", type=int, default=200, help="Embedding dimension")
     parser.add_argument("--epochs", type=int, default=20, help="Training epochs")
     parser.add_argument("--batch-size", type=int, default=10, help="Number of repos to process per batch")
+    parser.add_argument("--max-docs-per-batch", type=int, default=5000, help="Max documents per training sub-batch")
     parser.add_argument("--parallel-workers", type=int, help="Number of parallel workers (default: auto)")
     parser.add_argument("--max-repos", type=int, help="Maximum number of repos to process (for testing)")
 
@@ -239,7 +254,8 @@ if __name__ == "__main__":
     print(f"   Extensions: {args.ext}")
     print(f"   Vector size: {args.vector_size}")
     print(f"   Epochs: {args.epochs}")
-    print(f"   Batch size: {args.batch_size}")
+    print(f"   Batch size: {args.batch_size} repos")
+    print(f"   Max docs per batch: {args.max_docs_per_batch}")
     print(f"   Output: {args.output}\n")
 
     start_time = time.time()
@@ -250,6 +266,7 @@ if __name__ == "__main__":
         vector_size=args.vector_size,
         epochs=args.epochs,
         batch_size=args.batch_size,
+        max_docs_per_batch=args.max_docs_per_batch,
         parallel_workers=args.parallel_workers
     )
 

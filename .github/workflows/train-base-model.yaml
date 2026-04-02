@@ -57,7 +57,13 @@ on:
       batch_size:
         description: 'Number of repos to process per batch'
         required: false
-        default: '20'
+        default: '5'
+        type: string
+
+      max_docs_per_batch:
+        description: 'Max documents per training sub-batch (memory limit)'
+        required: false
+        default: '5000'
         type: string
 
       parallel_workers:
@@ -169,6 +175,7 @@ jobs:
             --vector-size ${{ github.event.inputs.vector_size }} \
             --epochs ${{ github.event.inputs.epochs }} \
             --batch-size ${{ github.event.inputs.batch_size }} \
+            --max-docs-per-batch ${{ github.event.inputs.max_docs_per_batch }} \
             --parallel-workers ${{ github.event.inputs.parallel_workers }}
 
       - name: Write Job Summary
@@ -204,7 +211,8 @@ jobs:
           | **Repositories** | ${{ github.event.inputs.repo_count }} |
           | **Vector size** | ${{ github.event.inputs.vector_size }} |
           | **Epochs** | ${{ github.event.inputs.epochs }} |
-          | **Batch size** | ${{ github.event.inputs.batch_size }} |
+          | **Batch size** | ${{ github.event.inputs.batch_size }} repos |
+          | **Max docs/batch** | ${{ github.event.inputs.max_docs_per_batch }} |
 
           ## Results
 
