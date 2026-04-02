@@ -44,7 +44,7 @@ python src/finetune_and_embed.py --repo <url> --base-model base_model.d2v --ext 
 ```
 
 ### GitHub Actions Workflows
-- `.github/workflows/train-base-model.yaml` - Train base model (supports `organization` input for org-specific repos)
+- `.github/workflows/train-base-model.yaml` - Train base model (supports `organization` input, job summary on completion)
 - `.github/workflows/finetune-model.yaml` - Fine-tune, embed, analyze duplicates
   - Inputs: `duplicate_threshold` (default 0.99)
   - Automatically runs duplicate analysis after embedding
