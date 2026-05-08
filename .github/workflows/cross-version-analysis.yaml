@@ -9,11 +9,11 @@ on:
         type: string
         default: 'https://github.com/apache/calcite.git'
 
-      tag_pattern:
-        description: 'Git tag pattern (e.g., "calcite-*", "v*", "rel/*")'
+      tag_regex:
+        description: 'Regex for version tags (e.g., "calcite-[0-9]+\.[0-9]+\.[0-9]+(-incubating)?$")'
         required: true
         type: string
-        default: 'calcite-*'
+        default: 'calcite-[0-9]+\.[0-9]+\.[0-9]+(-incubating)?$'
 
       max_versions:
         description: 'Maximum versions to process (0 = all)'
@@ -130,7 +130,7 @@ jobs:
           python src/cross_version_pipeline.py \
             --repo "${{ github.event.inputs.repo_url }}" \
             --base-model "$BASE_MODEL" \
-            --tag-pattern "${{ github.event.inputs.tag_pattern }}" \
+            --tag-regex "${{ github.event.inputs.tag_regex }}" \
             --ext ${{ github.event.inputs.file_extensions }} \
             --output "${{ steps.repo_name.outputs.repo_name }}" \
             --epochs ${{ github.event.inputs.finetune_epochs }} \
@@ -177,7 +177,7 @@ jobs:
           | Setting | Value |
           |---------|-------|
           | **Repository** | ${{ github.event.inputs.repo_url }} |
-          | **Tag pattern** | ${{ github.event.inputs.tag_pattern }} |
+          | **Tag regex** | ${{ github.event.inputs.tag_regex }} |
           | **Versions analyzed** | ${VERSIONS} |
           | **Threshold** | ${{ github.event.inputs.duplicate_threshold }} |
           | **Fine-tuned on** | ${FINETUNED_ON} |

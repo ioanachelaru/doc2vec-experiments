@@ -108,26 +108,28 @@ def get_repo_name_from_url(repo_url: str) -> str:
     return repo_url.split("/")[-1].replace(".git", "")
 
 
-def get_version_tags(repo_path: str | Path, tag_pattern: str) -> list[str]:
-    """List git tags matching a pattern, sorted by version order.
+def get_version_tags(repo_path: str | Path, tag_regex: str) -> list[str]:
+    """List git tags matching a regex pattern, sorted by version order.
 
     Uses git's built-in version:refname sorting which correctly handles
     semver-like tags (e.g., 1.9.0 before 1.10.0) and suffixes like -incubating.
 
     Args:
         repo_path: Path to a cloned git repository (must be a full clone)
-        tag_pattern: Glob pattern for tags (e.g., 'calcite-*')
+        tag_regex: Regex pattern for tags (e.g., 'calcite-[0-9]+\\.[0-9]+\\.[0-9]+(-incubating)?$')
 
     Returns:
         List of matching tag names sorted by version
     """
     result = subprocess.run(
-        ["git", "tag", "--list", tag_pattern, "--sort=version:refname"],
+        ["git", "tag", "--list", "--sort=version:refname"],
         cwd=str(repo_path),
         capture_output=True, text=True, check=True
     )
-    tags = [t.strip() for t in result.stdout.strip().split('\n') if t.strip()]
-    print(f"Found {len(tags)} tags matching '{tag_pattern}'")
+    all_tags = [t.strip() for t in result.stdout.strip().split('\n') if t.strip()]
+    pattern = re.compile(tag_regex)
+    tags = [t for t in all_tags if pattern.match(t)]
+    print(f"Found {len(tags)} tags matching '{tag_regex}' (from {len(all_tags)} total)")
     return tags
 
 

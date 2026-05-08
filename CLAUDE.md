@@ -51,7 +51,7 @@ python src/finetune_and_embed.py --repo <url> --base-model base_model.d2v --ext 
   - Automatically runs duplicate analysis after embedding
   - Results displayed on job summary page
 - `.github/workflows/cross-version-analysis.yaml` - Cross-version duplicate analysis
-  - Inputs: `repo_url`, `tag_pattern` (e.g., `calcite-*`), `max_versions`, `duplicate_threshold`
+  - Inputs: `repo_url`, `tag_regex` (e.g., `calcite-[0-9]+\.[0-9]+\.[0-9]+(-incubating)?$`), `max_versions`, `duplicate_threshold`
   - Fine-tunes on first version, embeds all versions, analyzes consecutive pairs + overall
   - Results displayed on job summary page with per-version and per-pair breakdowns
 
@@ -86,7 +86,7 @@ Output: `*_duplicates.csv` (pairs), `*_metadata.json` (stats)
 python src/cross_version_pipeline.py \
   --repo https://github.com/apache/calcite.git \
   --base-model base_model.d2v \
-  --tag-pattern "calcite-*" \
+  --tag-regex "calcite-[0-9]+\.[0-9]+\.[0-9]+(-incubating)?$" \
   --ext .java \
   --threshold 0.99 \
   --max-versions 5
