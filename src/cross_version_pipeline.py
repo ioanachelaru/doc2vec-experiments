@@ -179,28 +179,32 @@ def run_cross_version_pipeline(
     print(f"{'='*60}")
     valid_indices = [i for i, df in enumerate(all_embeddings) if df is not None]
 
+    overall_stats = {}
     if len(valid_indices) >= 2:
-        all_duplicates = []
-        total_files = sum(len(all_embeddings[i]) for i in valid_indices)
+        try:
+            all_duplicates = []
+            total_files = sum(len(all_embeddings[i]) for i in valid_indices)
 
-        for idx_a in range(len(valid_indices)):
-            for idx_b in range(idx_a + 1, len(valid_indices)):
-                i, j = valid_indices[idx_a], valid_indices[idx_b]
-                v_a, v_b = versions[i], versions[j]
-                result = find_cross_version_duplicates(
-                    all_embeddings[i], all_embeddings[j],
-                    v_a, v_b, threshold
-                )
-                all_duplicates.extend(result['duplicates'])
+            for idx_a in range(len(valid_indices)):
+                for idx_b in range(idx_a + 1, len(valid_indices)):
+                    i, j = valid_indices[idx_a], valid_indices[idx_b]
+                    v_a, v_b = versions[i], versions[j]
+                    result = find_cross_version_duplicates(
+                        all_embeddings[i], all_embeddings[j],
+                        v_a, v_b, threshold
+                    )
+                    all_duplicates.extend(result['duplicates'])
 
-        all_duplicates.sort(key=lambda x: x['similarity'], reverse=True)
-        overall_stats = generate_report(
-            all_duplicates, total_files, threshold,
-            f"{output_prefix}_all_versions"
-        )
+            all_duplicates.sort(key=lambda x: x['similarity'], reverse=True)
+            overall_stats = generate_report(
+                all_duplicates, total_files, threshold,
+                f"{output_prefix}_all_versions"
+            )
+        except MemoryError:
+            print("WARNING: Overall analysis ran out of memory, skipping.")
+            print("Consecutive pair results are still available.")
     else:
         print("Not enough valid versions for overall analysis")
-        overall_stats = {}
 
     # Step 7: Save cross-version metadata
     elapsed_time = time.time() - start_time
