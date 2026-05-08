@@ -2,8 +2,8 @@
 """
 cross_version_pipeline.py
 =========================
-Fine-tune a Doc2Vec model on the first version of a project,
-generate embeddings for all versions, and analyze cross-version duplicates.
+Cumulatively train a Doc2Vec model across project versions,
+generate embeddings for each version, and analyze cross-version duplicates.
 """
 
 import sys
@@ -86,37 +86,21 @@ def run_cross_version_pipeline(
 
     print(f"Versions to process ({len(versions)}):")
     for i, v in enumerate(versions):
-        label = " (fine-tune target)" if i == 0 else ""
-        print(f"  {i+1}. {v}{label}")
+        print(f"  {i+1}. {v}")
+    print(f"Training mode: cumulative (model trains on each version after embedding)")
 
-    # Step 3: Fine-tune on the first version
+    # Step 3: Cumulative training and embedding
+    # For each version: embed with the current model, then train on it
+    # so the next version benefits from cumulative vocabulary/knowledge.
+    # Exception: v1 is trained first (fine-tune), then embedded.
     print(f"\n{'='*60}")
-    print(f"Step 3: Fine-tuning on {versions[0]}")
+    print("Step 3: Cumulative training and embedding")
     print(f"{'='*60}")
     model = load_base_model(base_model_path)
 
-    checkout_version(repo_dir, versions[0])
-    files_v1 = get_source_files(repo_dir, extensions)
-    docs_v1 = prepare_documents(files_v1, repo_dir, tag_prefix=versions[0])
-
-    if not docs_v1:
-        print(f"Error: No source files found in {versions[0]}")
-        shutil.rmtree(repo_dir, ignore_errors=True)
-        sys.exit(1)
-
-    model = finetune_model(model, docs_v1, epochs=finetune_epochs, update_vocab=update_vocab)
-
-    # Save fine-tuned model
-    model_path = f"{output_prefix}_finetuned.d2v"
-    model.save(model_path)
-    print(f"Fine-tuned model saved to {model_path}")
-
-    # Step 4: Generate embeddings for all versions
-    print(f"\n{'='*60}")
-    print("Step 4: Generating embeddings for all versions")
-    print(f"{'='*60}")
     all_embeddings = []
     files_per_version = {}
+    model_state_per_version = {}
 
     for i, version_tag in enumerate(versions):
         print(f"\n--- Version {i+1}/{len(versions)}: {version_tag} ---")
@@ -129,16 +113,36 @@ def run_cross_version_pipeline(
             print(f"Warning: No source files in {version_tag}, skipping")
             all_embeddings.append(None)
             files_per_version[version_tag] = 0
+            model_state_per_version[version_tag] = f"trained on: {', '.join(versions[:i])}" if i > 0 else "base model"
             continue
 
-        embeddings_df = generate_embeddings(model, docs)
+        if i == 0:
+            # First version: fine-tune, then embed
+            print(f"Fine-tuning on {version_tag}...")
+            model = finetune_model(model, docs, epochs=finetune_epochs, update_vocab=update_vocab)
+            embeddings_df = generate_embeddings(model, docs)
+            model_state_per_version[version_tag] = f"trained on: {version_tag}"
+        else:
+            # Subsequent versions: embed first, then train for next iteration
+            trained_on = [versions[j] for j in range(i) if files_per_version.get(versions[j], 0) > 0]
+            model_state_per_version[version_tag] = f"trained on: {', '.join(trained_on)}"
+            embeddings_df = generate_embeddings(model, docs)
+            print(f"Training on {version_tag} for next iteration...")
+            model = finetune_model(model, docs, epochs=finetune_epochs, update_vocab=update_vocab)
+
         files_per_version[version_tag] = len(embeddings_df)
+        print(f"Vocab size: {len(model.wv)}")
 
         csv_path = f"{output_prefix}_{version_tag}_embeddings.csv"
         embeddings_df.to_csv(csv_path, index=False)
         print(f"Saved {len(embeddings_df)} embeddings to {csv_path}")
 
         all_embeddings.append(embeddings_df)
+
+    # Save final model
+    model_path = f"{output_prefix}_finetuned.d2v"
+    model.save(model_path)
+    print(f"\nFinal model saved to {model_path}")
 
     # Cleanup the clone
     shutil.rmtree(repo_dir, ignore_errors=True)
@@ -213,7 +217,8 @@ def run_cross_version_pipeline(
         "tag_regex": tag_regex,
         "versions_analyzed": versions,
         "files_per_version": files_per_version,
-        "finetuned_on": versions[0],
+        "training_mode": "cumulative",
+        "model_state_per_version": model_state_per_version,
         "finetune_epochs": finetune_epochs,
         "threshold": threshold,
         "consecutive_pair_results": consecutive_results,
