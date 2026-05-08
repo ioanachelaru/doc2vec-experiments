@@ -84,12 +84,14 @@ jobs:
           pip install -r requirements.txt
 
       - name: Download base model artifact
-        uses: dawidd6/action-download-artifact@v2
-        with:
-          workflow: train-base-model.yaml
-          run_id: ${{ github.event.inputs.base_model_run_id }}
-          name: ${{ github.event.inputs.base_model_artifact }}
-          path: ./base_model
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ./base_model
+          gh run download ${{ github.event.inputs.base_model_run_id }} \
+            -R ${{ github.repository }} \
+            -n ${{ github.event.inputs.base_model_artifact }} \
+            -D ./base_model
 
       - name: List downloaded files
         run: |
