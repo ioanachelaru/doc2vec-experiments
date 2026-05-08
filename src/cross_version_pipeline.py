@@ -38,7 +38,7 @@ from analyze_duplicates import (
 def run_cross_version_pipeline(
     repo_url: str,
     base_model_path: str,
-    tag_pattern: str,
+    tag_regex: str,
     extensions: list[str],
     output_prefix: str,
     finetune_epochs: int = 10,
@@ -51,7 +51,7 @@ def run_cross_version_pipeline(
     Args:
         repo_url: GitHub repository URL
         base_model_path: Path to pre-trained base Doc2Vec model
-        tag_pattern: Glob pattern for git tags (e.g., 'calcite-*')
+        tag_regex: Regex pattern for git tags (e.g., 'calcite-[0-9]+\\.[0-9]+\\.[0-9]+(-incubating)?$')
         extensions: File extensions to include
         output_prefix: Prefix for output files
         finetune_epochs: Number of fine-tuning epochs
@@ -74,7 +74,7 @@ def run_cross_version_pipeline(
     print(f"\n{'='*60}")
     print("Step 2: Extracting version tags")
     print(f"{'='*60}")
-    versions = get_version_tags(repo_dir, tag_pattern)
+    versions = get_version_tags(repo_dir, tag_regex)
 
     if len(versions) < 2:
         print(f"Error: Need at least 2 versions, found {len(versions)}")
@@ -195,7 +195,7 @@ def run_cross_version_pipeline(
     elapsed_time = time.time() - start_time
     metadata = {
         "repo_url": repo_url,
-        "tag_pattern": tag_pattern,
+        "tag_regex": tag_regex,
         "versions_analyzed": versions,
         "files_per_version": files_per_version,
         "finetuned_on": versions[0],
@@ -227,7 +227,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--repo", required=True, help="GitHub repository URL")
     parser.add_argument("--base-model", required=True, help="Path to base Doc2Vec model")
-    parser.add_argument("--tag-pattern", required=True, help="Git tag pattern (e.g., 'calcite-*')")
+    parser.add_argument("--tag-regex", required=True, help="Regex for version tags (e.g., 'calcite-[0-9]+\\.[0-9]+\\.[0-9]+(-incubating)?$')")
     parser.add_argument("--ext", nargs="+", default=[".java"], help="File extensions to include")
     parser.add_argument("--output", default="cross_version", help="Output prefix for files")
     parser.add_argument("--epochs", type=int, default=10, help="Fine-tuning epochs")
@@ -239,7 +239,7 @@ if __name__ == "__main__":
 
     print(f"   Cross-version duplicate analysis pipeline")
     print(f"   Repository: {args.repo}")
-    print(f"   Tag pattern: {args.tag_pattern}")
+    print(f"   Tag regex: {args.tag_regex}")
     print(f"   Base model: {args.base_model}")
     print(f"   Extensions: {args.ext}")
     print(f"   Fine-tune epochs: {args.epochs}")
@@ -251,7 +251,7 @@ if __name__ == "__main__":
     run_cross_version_pipeline(
         args.repo,
         args.base_model,
-        args.tag_pattern,
+        args.tag_regex,
         args.ext,
         args.output,
         finetune_epochs=args.epochs,
