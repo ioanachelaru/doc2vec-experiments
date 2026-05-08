@@ -29,7 +29,6 @@ from finetune_and_embed import (
     generate_embeddings,
 )
 from analyze_duplicates import (
-    find_duplicates,
     find_cross_version_duplicates,
     generate_report,
 )
@@ -87,57 +86,98 @@ def run_cross_version_pipeline(
     print(f"Versions to process ({len(versions)}):")
     for i, v in enumerate(versions):
         print(f"  {i+1}. {v}")
-    print(f"Training mode: cumulative (model trains on each version after embedding)")
+    print(f"Training mode: cumulative (each pair embedded with same model)")
 
-    # Step 3: Cumulative training and embedding
-    # For each version: embed with the current model, then train on it
-    # so the next version benefits from cumulative vocabulary/knowledge.
-    # Exception: v1 is trained first (fine-tune), then embedded.
+    # Step 3: Cumulative training, embedding, and pair analysis
+    # For each consecutive pair (vN, vN+1):
+    #   1. Train model on vN (cumulative)
+    #   2. Embed both vN and vN+1 with the same model
+    #   3. Compare the pair
+    # This ensures each consecutive pair uses the same embedding space.
     print(f"\n{'='*60}")
-    print("Step 3: Cumulative training and embedding")
+    print("Step 3: Cumulative training, embedding, and pair analysis")
     print(f"{'='*60}")
     model = load_base_model(base_model_path)
 
-    all_embeddings = []
     files_per_version = {}
     model_state_per_version = {}
+    consecutive_results = []
 
-    for i, version_tag in enumerate(versions):
-        print(f"\n--- Version {i+1}/{len(versions)}: {version_tag} ---")
-        checkout_version(repo_dir, version_tag)
+    for i in range(len(versions) - 1):
+        v_current = versions[i]
+        v_next = versions[i + 1]
+        trained_on = [versions[j] for j in range(i + 1) if files_per_version.get(versions[j], 0) != 0 or j == i]
 
-        files = get_source_files(repo_dir, extensions)
-        docs = prepare_documents(files, repo_dir, tag_prefix=version_tag)
+        print(f"\n{'='*60}")
+        print(f"Pair {i+1}/{len(versions)-1}: {v_current} vs {v_next}")
+        print(f"{'='*60}")
 
-        if not docs:
-            print(f"Warning: No source files in {version_tag}, skipping")
-            all_embeddings.append(None)
-            files_per_version[version_tag] = 0
-            model_state_per_version[version_tag] = f"trained on: {', '.join(versions[:i])}" if i > 0 else "base model"
+        # Train on current version
+        print(f"\nTraining on {v_current}...")
+        checkout_version(repo_dir, v_current)
+        files_current = get_source_files(repo_dir, extensions)
+        docs_current = prepare_documents(files_current, repo_dir, tag_prefix=v_current)
+
+        if not docs_current:
+            print(f"Warning: No source files in {v_current}, skipping pair")
+            files_per_version[v_current] = 0
             continue
 
-        if i == 0:
-            # First version: fine-tune, then embed
-            print(f"Fine-tuning on {version_tag}...")
-            model = finetune_model(model, docs, epochs=finetune_epochs, update_vocab=update_vocab)
-            embeddings_df = generate_embeddings(model, docs)
-            model_state_per_version[version_tag] = f"trained on: {version_tag}"
-        else:
-            # Subsequent versions: embed first, then train for next iteration
-            trained_on = [versions[j] for j in range(i) if files_per_version.get(versions[j], 0) > 0]
-            model_state_per_version[version_tag] = f"trained on: {', '.join(trained_on)}"
-            embeddings_df = generate_embeddings(model, docs)
-            print(f"Training on {version_tag} for next iteration...")
-            model = finetune_model(model, docs, epochs=finetune_epochs, update_vocab=update_vocab)
-
-        files_per_version[version_tag] = len(embeddings_df)
+        model = finetune_model(model, docs_current, epochs=finetune_epochs, update_vocab=update_vocab)
+        files_per_version[v_current] = len(docs_current)
+        model_state_per_version[v_current] = f"trained on: {', '.join(trained_on)}"
         print(f"Vocab size: {len(model.wv)}")
 
-        csv_path = f"{output_prefix}_{version_tag}_embeddings.csv"
-        embeddings_df.to_csv(csv_path, index=False)
-        print(f"Saved {len(embeddings_df)} embeddings to {csv_path}")
+        # Embed current version
+        print(f"\nEmbedding {v_current}...")
+        embeddings_current = generate_embeddings(model, docs_current)
+        csv_current = f"{output_prefix}_{v_current}_pair{i+1}_embeddings.csv"
+        embeddings_current.to_csv(csv_current, index=False)
+        print(f"Saved {len(embeddings_current)} embeddings to {csv_current}")
 
-        all_embeddings.append(embeddings_df)
+        # Embed next version with the same model
+        print(f"\nEmbedding {v_next}...")
+        checkout_version(repo_dir, v_next)
+        files_next = get_source_files(repo_dir, extensions)
+        docs_next = prepare_documents(files_next, repo_dir, tag_prefix=v_next)
+
+        if not docs_next:
+            print(f"Warning: No source files in {v_next}, skipping pair")
+            files_per_version[v_next] = 0
+            continue
+
+        embeddings_next = generate_embeddings(model, docs_next)
+        files_per_version[v_next] = len(docs_next)
+        csv_next = f"{output_prefix}_{v_next}_pair{i+1}_embeddings.csv"
+        embeddings_next.to_csv(csv_next, index=False)
+        print(f"Saved {len(embeddings_next)} embeddings to {csv_next}")
+
+        # Compare the pair
+        print(f"\nComparing {v_current} vs {v_next}...")
+        result = find_cross_version_duplicates(
+            embeddings_current, embeddings_next,
+            v_current, v_next, threshold
+        )
+
+        pair_prefix = f"{output_prefix}_{v_current}_vs_{v_next}"
+        stats = generate_report(result['duplicates'], result['total_files'], threshold, pair_prefix)
+
+        consecutive_results.append({
+            'version_a': v_current,
+            'version_b': v_next,
+            'model_trained_on': trained_on,
+            **stats
+        })
+
+    # Train on the last version to complete the cumulative model
+    last_v = versions[-1]
+    if files_per_version.get(last_v, 0) > 0:
+        print(f"\nTraining on final version {last_v}...")
+        checkout_version(repo_dir, last_v)
+        files_last = get_source_files(repo_dir, extensions)
+        docs_last = prepare_documents(files_last, repo_dir, tag_prefix=last_v)
+        if docs_last:
+            model = finetune_model(model, docs_last, epochs=finetune_epochs, update_vocab=update_vocab)
 
     # Save final model
     model_path = f"{output_prefix}_finetuned.d2v"
@@ -147,70 +187,18 @@ def run_cross_version_pipeline(
     # Cleanup the clone
     shutil.rmtree(repo_dir, ignore_errors=True)
 
-    # Step 5: Analyze consecutive-pair duplicates
+    # Step 4: Overall summary
+    # No overall cross-version matrix needed — each pair was compared
+    # with the same model, which is the primary analysis.
     print(f"\n{'='*60}")
-    print("Step 5: Analyzing consecutive version pairs")
+    print("Step 4: Summary")
     print(f"{'='*60}")
-    consecutive_results = []
+    overall_stats = {
+        'total_pairs_analyzed': len(consecutive_results),
+        'total_duplicate_pairs': sum(r['duplicate_pairs'] for r in consecutive_results),
+    }
 
-    for i in range(len(versions) - 1):
-        if all_embeddings[i] is None or all_embeddings[i + 1] is None:
-            print(f"Skipping {versions[i]} vs {versions[i+1]} (missing embeddings)")
-            continue
-
-        v_a, v_b = versions[i], versions[i + 1]
-        print(f"\n--- {v_a} vs {v_b} ---")
-
-        result = find_cross_version_duplicates(
-            all_embeddings[i], all_embeddings[i + 1],
-            v_a, v_b, threshold
-        )
-
-        pair_prefix = f"{output_prefix}_{v_a}_vs_{v_b}"
-        stats = generate_report(result['duplicates'], result['total_files'], threshold, pair_prefix)
-
-        consecutive_results.append({
-            'version_a': v_a,
-            'version_b': v_b,
-            **stats
-        })
-
-    # Step 6: Overall cross-version duplicate analysis
-    # Compare every version pair (not within-version) to avoid building
-    # a single N x N similarity matrix which can exceed memory limits.
-    print(f"\n{'='*60}")
-    print("Step 6: Overall cross-version duplicate analysis")
-    print(f"{'='*60}")
-    valid_indices = [i for i, df in enumerate(all_embeddings) if df is not None]
-
-    overall_stats = {}
-    if len(valid_indices) >= 2:
-        try:
-            all_duplicates = []
-            total_files = sum(len(all_embeddings[i]) for i in valid_indices)
-
-            for idx_a in range(len(valid_indices)):
-                for idx_b in range(idx_a + 1, len(valid_indices)):
-                    i, j = valid_indices[idx_a], valid_indices[idx_b]
-                    v_a, v_b = versions[i], versions[j]
-                    result = find_cross_version_duplicates(
-                        all_embeddings[i], all_embeddings[j],
-                        v_a, v_b, threshold
-                    )
-                    all_duplicates.extend(result['duplicates'])
-
-            all_duplicates.sort(key=lambda x: x['similarity'], reverse=True)
-            overall_stats = generate_report(
-                all_duplicates, total_files, threshold,
-                f"{output_prefix}_all_versions"
-            )
-        except MemoryError:
-            print("WARNING: Overall analysis ran out of memory, skipping.")
-            print("Consecutive pair results are still available.")
-    else:
-        print("Not enough valid versions for overall analysis")
-
-    # Step 7: Save cross-version metadata
+    # Step 5: Save cross-version metadata
     elapsed_time = time.time() - start_time
     metadata = {
         "repo_url": repo_url,
@@ -223,6 +211,7 @@ def run_cross_version_pipeline(
         "threshold": threshold,
         "consecutive_pair_results": consecutive_results,
         "overall_result": overall_stats,
+        "training_approach": "train on v1..vN, embed vN and vN+1 with same model per pair",
         "elapsed_time_minutes": round(elapsed_time / 60, 1),
     }
 

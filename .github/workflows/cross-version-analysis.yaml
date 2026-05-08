@@ -148,15 +148,14 @@ jobs:
             VERSIONS=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(len(m['versions_analyzed']))")
             TOTAL_FILES=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(sum(m['files_per_version'].values()))")
             ELAPSED=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(m['elapsed_time_minutes'])")
-            FINETUNED_ON=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(m['finetuned_on'])")
+            TOTAL_DUPS=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(m['overall_result'].get('total_duplicate_pairs', 'N/A'))")
 
             # Build version table
             VERSION_TABLE=$(python -c "
           import json
           m = json.load(open('$METADATA_FILE'))
           for v, count in m['files_per_version'].items():
-              ft = ' (fine-tuned)' if v == m['finetuned_on'] else ''
-              print(f'| {v}{ft} | {count} |')
+              print(f'| {v} | {count} |')
           ")
 
             # Build consecutive pairs table
@@ -166,10 +165,6 @@ jobs:
           for r in m['consecutive_pair_results']:
               print(f'| {r[\"version_a\"]} vs {r[\"version_b\"]} | {r[\"duplicate_pairs\"]} | {r[\"exact_duplicate_pairs\"]} | {r[\"percentage_files_with_duplicates\"]}% |')
           ")
-
-            # Overall stats
-            OVERALL_PAIRS=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(m['overall_result'].get('duplicate_pairs', 'N/A'))")
-            OVERALL_PCT=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(m['overall_result'].get('percentage_files_with_duplicates', 'N/A'))")
 
             cat >> $GITHUB_STEP_SUMMARY << EOF
           # Cross-Version Duplicate Analysis Report
@@ -181,9 +176,10 @@ jobs:
           | **Repository** | ${{ github.event.inputs.repo_url }} |
           | **Tag regex** | ${{ github.event.inputs.tag_regex }} |
           | **Versions analyzed** | ${VERSIONS} |
+          | **Training mode** | Cumulative (each pair uses same model) |
           | **Threshold** | ${{ github.event.inputs.duplicate_threshold }} |
-          | **Fine-tuned on** | ${FINETUNED_ON} |
           | **Total time** | ${ELAPSED} minutes |
+          | **Total duplicate pairs** | ${TOTAL_DUPS} |
 
           ## Files per Version
 
@@ -198,20 +194,12 @@ jobs:
           |------|----------------|------------------|----------------------|
           ${PAIRS_TABLE}
 
-          ## Overall (All Versions Merged)
-
-          | Metric | Value |
-          |--------|-------|
-          | Duplicate pairs | **${OVERALL_PAIRS}** |
-          | Files with duplicates | **${OVERALL_PCT}%** |
-
           ## Artifacts
 
           Download the artifacts below for:
-          - \`*_embeddings.csv\` - Per-version embeddings
+          - \`*_embeddings.csv\` - Per-pair embeddings
           - \`*_vs_*_duplicates.csv\` - Consecutive pair duplicate reports
-          - \`*_all_versions_duplicates.csv\` - Overall duplicate report
-          - \`*_finetuned.d2v\` - Fine-tuned model
+          - \`*_finetuned.d2v\` - Final cumulative model
           - \`*_cross_version_metadata.json\` - Full metadata
 
           ---
