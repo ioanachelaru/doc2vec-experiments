@@ -12,10 +12,11 @@ A GitHub Actions-powered pipeline for training Doc2Vec models on source code. Us
 
 ### Core Scripts (src/)
 - `train_base_model.py` - Train base model on multiple popular GitHub repos
-- `finetune_and_embed.py` - Fine-tune pre-trained model and generate embeddings
+- `finetune_and_embed.py` - Fine-tune pre-trained model and generate embeddings (single version)
+- `cross_version_pipeline.py` - Fine-tune on first version, embed all versions, analyze cross-version duplicates
 - `get_popular_repos.py` - Fetch popular repos from GitHub API (supports `--org` for organization filtering)
-- `analyze_duplicates.py` - Find duplicate/near-duplicate embeddings using cosine similarity
-- `utils.py` - Shared utilities (clone_repo, tokenize_code, prepare_documents)
+- `analyze_duplicates.py` - Find duplicate/near-duplicate embeddings (single-version and cross-version)
+- `utils.py` - Shared utilities (clone_repo, tokenize_code, prepare_documents, get_version_tags)
 
 ### Key Patterns
 - Doc2Vec with PV-DM algorithm (dm=1)
@@ -45,10 +46,14 @@ python src/finetune_and_embed.py --repo <url> --base-model base_model.d2v --ext 
 
 ### GitHub Actions Workflows
 - `.github/workflows/train-base-model.yaml` - Train base model (supports `organization` input, job summary on completion)
-- `.github/workflows/finetune-model.yaml` - Fine-tune, embed, analyze duplicates
+- `.github/workflows/finetune-model.yaml` - Fine-tune, embed, analyze duplicates (single version)
   - Inputs: `duplicate_threshold` (default 0.99)
   - Automatically runs duplicate analysis after embedding
   - Results displayed on job summary page
+- `.github/workflows/cross-version-analysis.yaml` - Cross-version duplicate analysis
+  - Inputs: `repo_url`, `tag_pattern` (e.g., `calcite-*`), `max_versions`, `duplicate_threshold`
+  - Fine-tunes on first version, embeds all versions, analyzes consecutive pairs + overall
+  - Results displayed on job summary page with per-version and per-pair breakdowns
 
 ### Constraints
 - GitHub API: max 1000 repos per search query
@@ -59,14 +64,37 @@ python src/finetune_and_embed.py --repo <url> --base-model base_model.d2v --ext 
 
 ### Analyzing Duplicates
 ```bash
-# After generating embeddings, find duplicate pairs (similarity >= 0.99)
+# Single-version: find duplicate pairs within one embeddings file
 python src/analyze_duplicates.py \
   --embeddings embeddings.csv \
   --threshold 0.99 \
   --output duplicates_report
+
+# Cross-version: compare two embeddings files
+python src/analyze_duplicates.py \
+  --embeddings-a v1_embeddings.csv \
+  --embeddings-b v2_embeddings.csv \
+  --threshold 0.99 \
+  --output v1_vs_v2_report
 ```
 
-Output: `duplicates_report_duplicates.csv` (pairs), `duplicates_report_metadata.json` (stats)
+Output: `*_duplicates.csv` (pairs), `*_metadata.json` (stats)
+
+### Cross-Version Analysis
+```bash
+# Full pipeline: fine-tune on first tag, embed all versions, analyze duplicates
+python src/cross_version_pipeline.py \
+  --repo https://github.com/apache/calcite.git \
+  --base-model base_model.d2v \
+  --tag-pattern "calcite-*" \
+  --ext .java \
+  --threshold 0.99 \
+  --max-versions 5
+```
+
+Output per version: `*_{tag}_embeddings.csv`
+Output per pair: `*_{tagA}_vs_{tagB}_duplicates.csv`
+Output overall: `*_all_versions_duplicates.csv`, `*_cross_version_metadata.json`
 
 ## Current Task (HRIA)
 - Train Doc2Vec on Apache Java repos (X=100)

@@ -134,14 +134,71 @@ def generate_report(
     return stats
 
 
+def find_cross_version_duplicates(
+    df_a: pd.DataFrame,
+    df_b: pd.DataFrame,
+    version_a: str,
+    version_b: str,
+    threshold: float = 0.99
+) -> dict:
+    """Find duplicates between two versions' embeddings.
+
+    Only compares files from version_a against files from version_b.
+    Does NOT find within-version duplicates.
+
+    Args:
+        df_a: Embeddings DataFrame for version A (file_path + dim_0..dim_199)
+        df_b: Embeddings DataFrame for version B
+        version_a: Label for version A
+        version_b: Label for version B
+        threshold: Minimum cosine similarity
+
+    Returns:
+        Dict with 'duplicates' list, 'total_files', and version labels
+    """
+    paths_a = df_a['file_path'].tolist()
+    paths_b = df_b['file_path'].tolist()
+    vectors_a = df_a.drop('file_path', axis=1).values
+    vectors_b = df_b.drop('file_path', axis=1).values
+
+    print(f"Computing cross-version similarity: {version_a} ({len(paths_a)} files) vs {version_b} ({len(paths_b)} files)...")
+    sim_matrix = cosine_similarity(vectors_a, vectors_b)
+
+    duplicates = []
+    for i in range(len(paths_a)):
+        for j in range(len(paths_b)):
+            if sim_matrix[i, j] >= threshold:
+                duplicates.append({
+                    'file_a': paths_a[i],
+                    'file_b': paths_b[j],
+                    'similarity': float(sim_matrix[i, j])
+                })
+
+    duplicates.sort(key=lambda x: x['similarity'], reverse=True)
+
+    return {
+        'duplicates': duplicates,
+        'total_files': len(paths_a) + len(paths_b),
+        'version_a': version_a,
+        'version_b': version_b,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Analyze embeddings for duplicate/near-duplicate pairs."
     )
     parser.add_argument(
         "--embeddings",
-        required=True,
-        help="Path to embeddings CSV file"
+        help="Path to embeddings CSV file (single-version mode)"
+    )
+    parser.add_argument(
+        "--embeddings-a",
+        help="Path to first embeddings CSV (cross-version mode)"
+    )
+    parser.add_argument(
+        "--embeddings-b",
+        help="Path to second embeddings CSV (cross-version mode)"
     )
     parser.add_argument(
         "--threshold",
@@ -157,14 +214,22 @@ def main():
 
     args = parser.parse_args()
 
-    # Load embeddings
-    file_paths, vectors = load_embeddings(args.embeddings)
+    if args.embeddings_a and args.embeddings_b:
+        # Cross-version mode
+        df_a = pd.read_csv(args.embeddings_a)
+        df_b = pd.read_csv(args.embeddings_b)
+        version_a = Path(args.embeddings_a).stem.replace("_embeddings", "")
+        version_b = Path(args.embeddings_b).stem.replace("_embeddings", "")
 
-    # Find duplicates
-    duplicates = find_duplicates(file_paths, vectors, args.threshold)
-
-    # Generate report
-    generate_report(duplicates, len(file_paths), args.threshold, args.output)
+        result = find_cross_version_duplicates(df_a, df_b, version_a, version_b, args.threshold)
+        generate_report(result['duplicates'], result['total_files'], args.threshold, args.output)
+    elif args.embeddings:
+        # Single-version mode
+        file_paths, vectors = load_embeddings(args.embeddings)
+        duplicates = find_duplicates(file_paths, vectors, args.threshold)
+        generate_report(duplicates, len(file_paths), args.threshold, args.output)
+    else:
+        parser.error("Provide either --embeddings or both --embeddings-a and --embeddings-b")
 
     print("\nDuplicate analysis complete!")
 
