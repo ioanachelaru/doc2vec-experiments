@@ -13,7 +13,7 @@ A GitHub Actions-powered pipeline for training Doc2Vec models on source code. Us
 ### Core Scripts (src/)
 - `train_base_model.py` - Train base model on multiple popular GitHub repos
 - `finetune_and_embed.py` - Fine-tune pre-trained model and generate embeddings (single version)
-- `cross_version_pipeline.py` - Fine-tune on first version, embed all versions, analyze cross-version duplicates
+- `cross_version_pipeline.py` - Cumulative training across versions, embed each version, analyze cross-version duplicates
 - `get_popular_repos.py` - Fetch popular repos from GitHub API (supports `--org` for organization filtering)
 - `analyze_duplicates.py` - Find duplicate/near-duplicate embeddings (single-version and cross-version)
 - `utils.py` - Shared utilities (clone_repo, tokenize_code, prepare_documents, get_version_tags)
@@ -52,7 +52,7 @@ python src/finetune_and_embed.py --repo <url> --base-model base_model.d2v --ext 
   - Results displayed on job summary page
 - `.github/workflows/cross-version-analysis.yaml` - Cross-version duplicate analysis
   - Inputs: `repo_url`, `tag_regex` (e.g., `calcite-[0-9]+\.[0-9]+\.[0-9]+(-incubating)?$`), `max_versions`, `duplicate_threshold`
-  - Fine-tunes on first version, embeds all versions, analyzes consecutive pairs + overall
+  - Cumulatively trains across versions, embeds each version, analyzes consecutive pairs + overall
   - Results displayed on job summary page with per-version and per-pair breakdowns
 
 ### Constraints
