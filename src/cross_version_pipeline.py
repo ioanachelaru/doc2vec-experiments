@@ -171,20 +171,31 @@ def run_cross_version_pipeline(
             **stats
         })
 
-    # Step 6: Overall merged analysis
+    # Step 6: Overall cross-version duplicate analysis
+    # Compare every version pair (not within-version) to avoid building
+    # a single N x N similarity matrix which can exceed memory limits.
     print(f"\n{'='*60}")
     print("Step 6: Overall cross-version duplicate analysis")
     print(f"{'='*60}")
-    valid_embeddings = [df for df in all_embeddings if df is not None]
+    valid_indices = [i for i, df in enumerate(all_embeddings) if df is not None]
 
-    if len(valid_embeddings) >= 2:
-        merged_df = pd.concat(valid_embeddings, ignore_index=True)
-        file_paths = merged_df['file_path'].tolist()
-        vectors = merged_df.drop('file_path', axis=1).values
+    if len(valid_indices) >= 2:
+        all_duplicates = []
+        total_files = sum(len(all_embeddings[i]) for i in valid_indices)
 
-        all_duplicates = find_duplicates(file_paths, vectors, threshold)
+        for idx_a in range(len(valid_indices)):
+            for idx_b in range(idx_a + 1, len(valid_indices)):
+                i, j = valid_indices[idx_a], valid_indices[idx_b]
+                v_a, v_b = versions[i], versions[j]
+                result = find_cross_version_duplicates(
+                    all_embeddings[i], all_embeddings[j],
+                    v_a, v_b, threshold
+                )
+                all_duplicates.extend(result['duplicates'])
+
+        all_duplicates.sort(key=lambda x: x['similarity'], reverse=True)
         overall_stats = generate_report(
-            all_duplicates, len(file_paths), threshold,
+            all_duplicates, total_files, threshold,
             f"{output_prefix}_all_versions"
         )
     else:
