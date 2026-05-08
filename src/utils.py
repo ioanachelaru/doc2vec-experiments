@@ -13,13 +13,14 @@ from tqdm import tqdm
 from gensim.models.doc2vec import TaggedDocument
 
 
-def clone_repo(github_url: str, dest_dir: str = None, version: str = None) -> Path:
+def clone_repo(github_url: str, dest_dir: str = None, version: str = None, shallow: bool = True) -> Path:
     """Clone a GitHub repository and optionally checkout a specific version.
 
     Args:
         github_url: The GitHub repository URL
         dest_dir: Optional destination directory
         version: Optional commit SHA, tag, or branch to checkout
+        shallow: Use shallow clone when no version is specified (default True)
 
     Returns:
         Path to the cloned repository
@@ -40,9 +41,13 @@ def clone_repo(github_url: str, dest_dir: str = None, version: str = None) -> Pa
             check=True
         )
         print(f"Checked out version: {version}")
-    else:
+    elif shallow:
         # Shallow clone for latest version (faster)
         subprocess.run(["git", "clone", "--depth", "1", github_url, dest_dir], check=True)
+        print(f"Repository cloned to: {dest_dir}")
+    else:
+        # Full clone without checking out a specific version
+        subprocess.run(["git", "clone", github_url, dest_dir], check=True)
         print(f"Repository cloned to: {dest_dir}")
 
     return Path(dest_dir)
@@ -101,3 +106,46 @@ def prepare_documents(files: list[Path], repo_root: Path, tag_prefix: str = None
 def get_repo_name_from_url(repo_url: str) -> str:
     """Extract repository name from GitHub URL."""
     return repo_url.split("/")[-1].replace(".git", "")
+
+
+def get_version_tags(repo_path: str | Path, tag_pattern: str) -> list[str]:
+    """List git tags matching a pattern, sorted by version order.
+
+    Uses git's built-in version:refname sorting which correctly handles
+    semver-like tags (e.g., 1.9.0 before 1.10.0) and suffixes like -incubating.
+
+    Args:
+        repo_path: Path to a cloned git repository (must be a full clone)
+        tag_pattern: Glob pattern for tags (e.g., 'calcite-*')
+
+    Returns:
+        List of matching tag names sorted by version
+    """
+    result = subprocess.run(
+        ["git", "tag", "--list", tag_pattern, "--sort=version:refname"],
+        cwd=str(repo_path),
+        capture_output=True, text=True, check=True
+    )
+    tags = [t.strip() for t in result.stdout.strip().split('\n') if t.strip()]
+    print(f"Found {len(tags)} tags matching '{tag_pattern}'")
+    return tags
+
+
+def checkout_version(repo_path: str | Path, version: str):
+    """Checkout a specific version and clean the working tree.
+
+    Args:
+        repo_path: Path to the git repository
+        version: Tag, branch, or commit SHA to checkout
+    """
+    subprocess.run(
+        ["git", "checkout", version],
+        cwd=str(repo_path), check=True,
+        capture_output=True
+    )
+    subprocess.run(
+        ["git", "clean", "-fdx"],
+        cwd=str(repo_path), check=True,
+        capture_output=True
+    )
+    print(f"Checked out version: {version}")

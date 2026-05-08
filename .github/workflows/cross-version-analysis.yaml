@@ -1,0 +1,229 @@
+name: Cross-Version Duplicate Analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_url:
+        description: 'GitHub repository URL to analyze'
+        required: true
+        type: string
+        default: 'https://github.com/apache/calcite.git'
+
+      tag_pattern:
+        description: 'Git tag pattern (e.g., "calcite-*", "v*", "rel/*")'
+        required: true
+        type: string
+        default: 'calcite-*'
+
+      max_versions:
+        description: 'Maximum versions to process (0 = all)'
+        required: false
+        default: '0'
+        type: string
+
+      base_model_run_id:
+        description: 'Run ID from base model workflow (find in URL: .../actions/runs/[RUN_ID])'
+        required: true
+        type: string
+
+      base_model_artifact:
+        description: 'Name of the base model artifact'
+        required: true
+        default: 'base-model-java'
+        type: string
+
+      file_extensions:
+        description: 'File extensions (space-separated, e.g., ".java .scala")'
+        required: true
+        default: '.java'
+        type: string
+
+      finetune_epochs:
+        description: 'Number of fine-tuning epochs'
+        required: false
+        default: '10'
+        type: string
+
+      update_vocab:
+        description: 'Update vocabulary with new words from target repo'
+        required: false
+        default: true
+        type: boolean
+
+      duplicate_threshold:
+        description: 'Cosine similarity threshold for duplicate detection'
+        required: false
+        default: '0.99'
+        type: string
+
+jobs:
+  cross-version-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours max
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download base model artifact
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          workflow: train-base-model.yaml
+          run_id: ${{ github.event.inputs.base_model_run_id }}
+          name: ${{ github.event.inputs.base_model_artifact }}
+          path: ./base_model
+
+      - name: List downloaded files
+        run: |
+          echo "Base model files:"
+          ls -la ./base_model/
+
+      - name: Extract repository name
+        id: repo_name
+        run: |
+          REPO_NAME=$(echo "${{ github.event.inputs.repo_url }}" | sed 's|.*/||; s|\.git$||')
+          echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
+          echo "Repository name: ${REPO_NAME}"
+
+      - name: Setup swap space
+        run: |
+          echo "Setting up additional swap space..."
+          sudo fallocate -l 8G /swapfile2
+          sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2
+          sudo swapon /swapfile2
+          sudo swapon --show
+
+      - name: Run cross-version analysis
+        run: |
+          BASE_MODEL=$(find ./base_model -name "*.d2v" | head -1)
+          echo "Using base model: $BASE_MODEL"
+
+          VOCAB_FLAG=""
+          if [ "${{ github.event.inputs.update_vocab }}" = "false" ]; then
+            VOCAB_FLAG="--no-vocab-update"
+          fi
+
+          MAX_VER_FLAG=""
+          if [ "${{ github.event.inputs.max_versions }}" != "0" ]; then
+            MAX_VER_FLAG="--max-versions ${{ github.event.inputs.max_versions }}"
+          fi
+
+          python src/cross_version_pipeline.py \
+            --repo "${{ github.event.inputs.repo_url }}" \
+            --base-model "$BASE_MODEL" \
+            --tag-pattern "${{ github.event.inputs.tag_pattern }}" \
+            --ext ${{ github.event.inputs.file_extensions }} \
+            --output "${{ steps.repo_name.outputs.repo_name }}" \
+            --epochs ${{ github.event.inputs.finetune_epochs }} \
+            --threshold ${{ github.event.inputs.duplicate_threshold }} \
+            $VOCAB_FLAG $MAX_VER_FLAG
+
+      - name: Write Job Summary
+        if: always()
+        run: |
+          METADATA_FILE="${{ steps.repo_name.outputs.repo_name }}_cross_version_metadata.json"
+
+          if [ -f "$METADATA_FILE" ]; then
+            VERSIONS=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(len(m['versions_analyzed']))")
+            TOTAL_FILES=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(sum(m['files_per_version'].values()))")
+            ELAPSED=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(m['elapsed_time_minutes'])")
+            FINETUNED_ON=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(m['finetuned_on'])")
+
+            # Build version table
+            VERSION_TABLE=$(python -c "
+          import json
+          m = json.load(open('$METADATA_FILE'))
+          for v, count in m['files_per_version'].items():
+              ft = ' (fine-tuned)' if v == m['finetuned_on'] else ''
+              print(f'| {v}{ft} | {count} |')
+          ")
+
+            # Build consecutive pairs table
+            PAIRS_TABLE=$(python -c "
+          import json
+          m = json.load(open('$METADATA_FILE'))
+          for r in m['consecutive_pair_results']:
+              print(f'| {r[\"version_a\"]} vs {r[\"version_b\"]} | {r[\"duplicate_pairs\"]} | {r[\"exact_duplicate_pairs\"]} | {r[\"percentage_files_with_duplicates\"]}% |')
+          ")
+
+            # Overall stats
+            OVERALL_PAIRS=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(m['overall_result'].get('duplicate_pairs', 'N/A'))")
+            OVERALL_PCT=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(m['overall_result'].get('percentage_files_with_duplicates', 'N/A'))")
+
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+          # Cross-Version Duplicate Analysis Report
+
+          ## Configuration
+
+          | Setting | Value |
+          |---------|-------|
+          | **Repository** | ${{ github.event.inputs.repo_url }} |
+          | **Tag pattern** | ${{ github.event.inputs.tag_pattern }} |
+          | **Versions analyzed** | ${VERSIONS} |
+          | **Threshold** | ${{ github.event.inputs.duplicate_threshold }} |
+          | **Fine-tuned on** | ${FINETUNED_ON} |
+          | **Total time** | ${ELAPSED} minutes |
+
+          ## Files per Version
+
+          | Version | Files |
+          |---------|-------|
+          ${VERSION_TABLE}
+          | **Total** | **${TOTAL_FILES}** |
+
+          ## Consecutive Version Pairs
+
+          | Pair | Duplicate Pairs | Exact Duplicates | Files with Duplicates |
+          |------|----------------|------------------|----------------------|
+          ${PAIRS_TABLE}
+
+          ## Overall (All Versions Merged)
+
+          | Metric | Value |
+          |--------|-------|
+          | Duplicate pairs | **${OVERALL_PAIRS}** |
+          | Files with duplicates | **${OVERALL_PCT}%** |
+
+          ## Artifacts
+
+          Download the artifacts below for:
+          - \`*_embeddings.csv\` - Per-version embeddings
+          - \`*_vs_*_duplicates.csv\` - Consecutive pair duplicate reports
+          - \`*_all_versions_duplicates.csv\` - Overall duplicate report
+          - \`*_finetuned.d2v\` - Fine-tuned model
+          - \`*_cross_version_metadata.json\` - Full metadata
+
+          ---
+          *Generated by [doc2vec-experiments](https://github.com/${{ github.repository }})*
+          EOF
+          else
+            echo "## Cross-Version Analysis" >> $GITHUB_STEP_SUMMARY
+            echo "Analysis did not complete successfully. Check logs for details." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-version-${{ steps.repo_name.outputs.repo_name }}
+          path: |
+            ${{ steps.repo_name.outputs.repo_name }}_*
+          retention-days: 90
