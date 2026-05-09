@@ -102,6 +102,7 @@ def run_cross_version_pipeline(
     files_per_version = {}
     model_state_per_version = {}
     consecutive_results = []
+    training_embeddings = []  # accumulated (version_tag, DataFrame) for leakage analysis
 
     for i in range(len(versions) - 1):
         v_current = versions[i]
@@ -135,6 +136,39 @@ def run_cross_version_pipeline(
         embeddings_current.to_csv(csv_current, index=False)
         print(f"Saved {len(embeddings_current)} embeddings to {csv_current}")
 
+        # Accumulate training embeddings
+        training_embeddings.append((v_current, embeddings_current))
+
+        # Within-training duplicate analysis
+        training_set_size = sum(len(df) for _, df in training_embeddings)
+        print(f"\nWithin-training duplicates (training set: {training_set_size} files across {len(training_embeddings)} versions)...")
+        train_duplicates = []
+        for a in range(len(training_embeddings)):
+            for b in range(a + 1, len(training_embeddings)):
+                result_train = find_cross_version_duplicates(
+                    training_embeddings[a][1], training_embeddings[b][1],
+                    training_embeddings[a][0], training_embeddings[b][0], threshold
+                )
+                train_duplicates.extend(result_train['duplicates'])
+        # Also check within each version
+        for tag, df in training_embeddings:
+            result_within = find_cross_version_duplicates(df, df, tag, tag, threshold)
+            # Remove self-comparisons (same file matched to itself)
+            within_dups = [d for d in result_within['duplicates'] if d['file_a'] != d['file_b']]
+            # Remove mirror pairs (A,B) and (B,A)
+            seen = set()
+            for d in within_dups:
+                pair_key = tuple(sorted([d['file_a'], d['file_b']]))
+                if pair_key not in seen:
+                    seen.add(pair_key)
+                    train_duplicates.append(d)
+
+        print(f"  Training duplicate pairs: {len(train_duplicates)}")
+        if train_duplicates:
+            train_dup_csv = f"{output_prefix}_pair{i+1}_train_duplicates.csv"
+            pd.DataFrame(train_duplicates).to_csv(train_dup_csv, index=False)
+            print(f"  Saved to {train_dup_csv}")
+
         # Embed next version with the same model
         print(f"\nEmbedding {v_next}...")
         checkout_version(repo_dir, v_next)
@@ -152,7 +186,26 @@ def run_cross_version_pipeline(
         embeddings_next.to_csv(csv_next, index=False)
         print(f"Saved {len(embeddings_next)} embeddings to {csv_next}")
 
-        # Compare the pair
+        # Train-test leakage analysis
+        print(f"\nTrain-test leakage ({training_set_size} train files vs {len(embeddings_next)} test files)...")
+        leakage_duplicates = []
+        for tag, train_df in training_embeddings:
+            result_leak = find_cross_version_duplicates(
+                train_df, embeddings_next, tag, v_next, threshold
+            )
+            leakage_duplicates.extend(result_leak['duplicates'])
+
+        test_files_with_leakage = set(d['file_b'] for d in leakage_duplicates)
+        leakage_pct = round(len(test_files_with_leakage) / len(embeddings_next) * 100, 2) if len(embeddings_next) > 0 else 0
+        print(f"  Leakage pairs: {len(leakage_duplicates)}")
+        print(f"  Test files with leakage: {len(test_files_with_leakage)}/{len(embeddings_next)} ({leakage_pct}%)")
+
+        if leakage_duplicates:
+            leakage_csv = f"{output_prefix}_pair{i+1}_leakage.csv"
+            pd.DataFrame(leakage_duplicates).to_csv(leakage_csv, index=False)
+            print(f"  Saved to {leakage_csv}")
+
+        # Compare the pair (consecutive version comparison)
         print(f"\nComparing {v_current} vs {v_next}...")
         result = find_cross_version_duplicates(
             embeddings_current, embeddings_next,
@@ -166,6 +219,12 @@ def run_cross_version_pipeline(
             'version_a': v_current,
             'version_b': v_next,
             'model_trained_on': trained_on,
+            'training_set_size': training_set_size,
+            'training_duplicate_pairs': len(train_duplicates),
+            'test_set_size': len(embeddings_next),
+            'test_entries_with_leakage': len(test_files_with_leakage),
+            'test_leakage_percentage': leakage_pct,
+            'leakage_pairs': len(leakage_duplicates),
             **stats
         })
 
