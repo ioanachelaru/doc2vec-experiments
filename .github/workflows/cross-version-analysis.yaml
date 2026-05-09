@@ -163,7 +163,7 @@ jobs:
           import json
           m = json.load(open('$METADATA_FILE'))
           for r in m['consecutive_pair_results']:
-              print(f'| {r[\"version_a\"]} vs {r[\"version_b\"]} | {r[\"duplicate_pairs\"]} | {r[\"exact_duplicate_pairs\"]} | {r[\"percentage_files_with_duplicates\"]}% |')
+              print(f'| {r[\"version_a\"]} vs {r[\"version_b\"]} | {r[\"training_set_size\"]} | {r[\"training_duplicate_pairs\"]} | {r[\"test_set_size\"]} | {r[\"test_entries_with_leakage\"]} | {r[\"test_leakage_percentage\"]}% | {r[\"duplicate_pairs\"]} | {r[\"exact_duplicate_pairs\"]} |')
           ")
 
             cat >> $GITHUB_STEP_SUMMARY << EOF
@@ -190,8 +190,8 @@ jobs:
 
           ## Consecutive Version Pairs
 
-          | Pair | Duplicate Pairs | Exact Duplicates | Files with Duplicates |
-          |------|----------------|------------------|----------------------|
+          | Pair | Train Files | Train Dups | Test Files | Test Leakage | Leakage % | Consec. Dups | Exact Dups |
+          |------|-------------|------------|------------|--------------|-----------|--------------|------------|
           ${PAIRS_TABLE}
 
           ## Artifacts
@@ -199,6 +199,8 @@ jobs:
           Download the artifacts below for:
           - \`*_embeddings.csv\` - Per-pair embeddings
           - \`*_vs_*_duplicates.csv\` - Consecutive pair duplicate reports
+          - \`*_train_duplicates.csv\` - Within-training duplicate pairs
+          - \`*_leakage.csv\` - Train-test leakage pairs
           - \`*_finetuned.d2v\` - Final cumulative model
           - \`*_cross_version_metadata.json\` - Full metadata
 

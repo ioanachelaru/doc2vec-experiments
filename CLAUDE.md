@@ -13,7 +13,7 @@ A GitHub Actions-powered pipeline for training Doc2Vec models on source code. Us
 ### Core Scripts (src/)
 - `train_base_model.py` - Train base model on multiple popular GitHub repos
 - `finetune_and_embed.py` - Fine-tune pre-trained model and generate embeddings (single version)
-- `cross_version_pipeline.py` - Cumulative training across versions, embed each version, analyze cross-version duplicates
+- `cross_version_pipeline.py` - Cumulative training across versions, embed each version, analyze cross-version duplicates + train/test leakage
 - `get_popular_repos.py` - Fetch popular repos from GitHub API (supports `--org` for organization filtering)
 - `analyze_duplicates.py` - Find duplicate/near-duplicate embeddings (single-version and cross-version)
 - `utils.py` - Shared utilities (clone_repo, tokenize_code, prepare_documents, get_version_tags)
@@ -52,7 +52,9 @@ python src/finetune_and_embed.py --repo <url> --base-model base_model.d2v --ext 
   - Results displayed on job summary page
 - `.github/workflows/cross-version-analysis.yaml` - Cross-version duplicate analysis
   - Inputs: `repo_url`, `tag_regex` (e.g., `calcite-[0-9]+\.[0-9]+\.[0-9]+(-incubating)?$`), `max_versions`, `duplicate_threshold`
-  - Cumulatively trains across versions, embeds each version, analyzes consecutive pairs + overall
+  - Cumulatively trains across versions, embeds each version, analyzes consecutive pairs
+  - Train/test leakage analysis: at each iteration, reports within-training duplicates and test entries that have near-duplicates in the training set
+  - Output: `*_train_duplicates.csv` (within-training dups), `*_leakage.csv` (train-test leakage pairs)
   - Results displayed on job summary page with per-version and per-pair breakdowns
 
 ### Constraints
@@ -94,7 +96,8 @@ python src/cross_version_pipeline.py \
 
 Output per version: `*_{tag}_embeddings.csv`
 Output per pair: `*_{tagA}_vs_{tagB}_duplicates.csv`
-Output overall: `*_all_versions_duplicates.csv`, `*_cross_version_metadata.json`
+Train/test analysis: `*_pair{N}_train_duplicates.csv`, `*_pair{N}_leakage.csv`
+Metadata: `*_cross_version_metadata.json` (includes leakage stats per pair)
 
 ## Current Task (HRIA)
 - Train Doc2Vec on Apache Java repos (X=100)
