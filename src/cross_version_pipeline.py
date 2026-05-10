@@ -30,6 +30,7 @@ from finetune_and_embed import (
 )
 from analyze_duplicates import (
     find_cross_version_duplicates,
+    find_duplicates,
     generate_report,
 )
 
@@ -102,7 +103,7 @@ def run_cross_version_pipeline(
     files_per_version = {}
     model_state_per_version = {}
     consecutive_results = []
-    training_embeddings = []  # accumulated (version_tag, DataFrame) for leakage analysis
+    all_version_docs = {}  # keep docs in memory for end-of-pipeline leakage analysis
 
     for i in range(len(versions) - 1):
         v_current = versions[i]
@@ -127,6 +128,7 @@ def run_cross_version_pipeline(
         model = finetune_model(model, docs_current, epochs=finetune_epochs, update_vocab=update_vocab)
         files_per_version[v_current] = len(docs_current)
         model_state_per_version[v_current] = f"trained on: {', '.join(trained_on)}"
+        all_version_docs[v_current] = docs_current
         print(f"Vocab size: {len(model.wv)}")
 
         # Embed current version
@@ -135,39 +137,6 @@ def run_cross_version_pipeline(
         csv_current = f"{output_prefix}_{v_current}_pair{i+1}_embeddings.csv"
         embeddings_current.to_csv(csv_current, index=False)
         print(f"Saved {len(embeddings_current)} embeddings to {csv_current}")
-
-        # Accumulate training embeddings
-        training_embeddings.append((v_current, embeddings_current))
-
-        # Within-training duplicate analysis
-        training_set_size = sum(len(df) for _, df in training_embeddings)
-        print(f"\nWithin-training duplicates (training set: {training_set_size} files across {len(training_embeddings)} versions)...")
-        train_duplicates = []
-        for a in range(len(training_embeddings)):
-            for b in range(a + 1, len(training_embeddings)):
-                result_train = find_cross_version_duplicates(
-                    training_embeddings[a][1], training_embeddings[b][1],
-                    training_embeddings[a][0], training_embeddings[b][0], threshold
-                )
-                train_duplicates.extend(result_train['duplicates'])
-        # Also check within each version
-        for tag, df in training_embeddings:
-            result_within = find_cross_version_duplicates(df, df, tag, tag, threshold)
-            # Remove self-comparisons (same file matched to itself)
-            within_dups = [d for d in result_within['duplicates'] if d['file_a'] != d['file_b']]
-            # Remove mirror pairs (A,B) and (B,A)
-            seen = set()
-            for d in within_dups:
-                pair_key = tuple(sorted([d['file_a'], d['file_b']]))
-                if pair_key not in seen:
-                    seen.add(pair_key)
-                    train_duplicates.append(d)
-
-        print(f"  Training duplicate pairs: {len(train_duplicates)}")
-        if train_duplicates:
-            train_dup_csv = f"{output_prefix}_pair{i+1}_train_duplicates.csv"
-            pd.DataFrame(train_duplicates).to_csv(train_dup_csv, index=False)
-            print(f"  Saved to {train_dup_csv}")
 
         # Embed next version with the same model
         print(f"\nEmbedding {v_next}...")
@@ -182,28 +151,10 @@ def run_cross_version_pipeline(
 
         embeddings_next = generate_embeddings(model, docs_next)
         files_per_version[v_next] = len(docs_next)
+        all_version_docs[v_next] = docs_next
         csv_next = f"{output_prefix}_{v_next}_pair{i+1}_embeddings.csv"
         embeddings_next.to_csv(csv_next, index=False)
         print(f"Saved {len(embeddings_next)} embeddings to {csv_next}")
-
-        # Train-test leakage analysis
-        print(f"\nTrain-test leakage ({training_set_size} train files vs {len(embeddings_next)} test files)...")
-        leakage_duplicates = []
-        for tag, train_df in training_embeddings:
-            result_leak = find_cross_version_duplicates(
-                train_df, embeddings_next, tag, v_next, threshold
-            )
-            leakage_duplicates.extend(result_leak['duplicates'])
-
-        test_files_with_leakage = set(d['file_b'] for d in leakage_duplicates)
-        leakage_pct = round(len(test_files_with_leakage) / len(embeddings_next) * 100, 2) if len(embeddings_next) > 0 else 0
-        print(f"  Leakage pairs: {len(leakage_duplicates)}")
-        print(f"  Test files with leakage: {len(test_files_with_leakage)}/{len(embeddings_next)} ({leakage_pct}%)")
-
-        if leakage_duplicates:
-            leakage_csv = f"{output_prefix}_pair{i+1}_leakage.csv"
-            pd.DataFrame(leakage_duplicates).to_csv(leakage_csv, index=False)
-            print(f"  Saved to {leakage_csv}")
 
         # Compare the pair (consecutive version comparison)
         print(f"\nComparing {v_current} vs {v_next}...")
@@ -219,12 +170,6 @@ def run_cross_version_pipeline(
             'version_a': v_current,
             'version_b': v_next,
             'model_trained_on': trained_on,
-            'training_set_size': training_set_size,
-            'training_duplicate_pairs': len(train_duplicates),
-            'test_set_size': len(embeddings_next),
-            'test_entries_with_leakage': len(test_files_with_leakage),
-            'test_leakage_percentage': leakage_pct,
-            'leakage_pairs': len(leakage_duplicates),
             **stats
         })
 
@@ -236,6 +181,7 @@ def run_cross_version_pipeline(
         files_last = get_source_files(repo_dir, extensions)
         docs_last = prepare_documents(files_last, repo_dir, tag_prefix=last_v)
         if docs_last:
+            all_version_docs[last_v] = docs_last
             model = finetune_model(model, docs_last, epochs=finetune_epochs, update_vocab=update_vocab)
 
     # Save final model
@@ -243,21 +189,118 @@ def run_cross_version_pipeline(
     model.save(model_path)
     print(f"\nFinal model saved to {model_path}")
 
-    # Cleanup the clone
+    # Cleanup the clone (docs are kept in memory for leakage analysis)
     shutil.rmtree(repo_dir, ignore_errors=True)
 
-    # Step 4: Overall summary
-    # No overall cross-version matrix needed — each pair was compared
-    # with the same model, which is the primary analysis.
+    # Step 4: Train/Test Leakage Analysis
+    # Re-embed all versions with the final model so all embeddings share
+    # the same embedding space, then compute within-training duplicates
+    # and train-test leakage for each pair boundary.
     print(f"\n{'='*60}")
-    print("Step 4: Summary")
+    print("Step 4: Train/Test Leakage Analysis")
+    print(f"{'='*60}")
+
+    versions_with_docs = [v for v in versions if v in all_version_docs and all_version_docs[v]]
+    print(f"\nRe-embedding {len(versions_with_docs)} versions with final model...")
+
+    version_embeddings = {}
+    for v in versions_with_docs:
+        emb = generate_embeddings(model, all_version_docs[v])
+        version_embeddings[v] = emb
+        print(f"  {v}: {len(emb)} files")
+
+    # Free docs from memory now that we have embeddings
+    all_version_docs.clear()
+
+    # Compute all pairwise cross-version duplicates (once)
+    print(f"\nComputing all pairwise cross-version duplicates...")
+    cross_version_dups = {}
+    for a in range(len(versions_with_docs)):
+        for b in range(a + 1, len(versions_with_docs)):
+            va, vb = versions_with_docs[a], versions_with_docs[b]
+            result_pair = find_cross_version_duplicates(
+                version_embeddings[va], version_embeddings[vb],
+                va, vb, threshold
+            )
+            cross_version_dups[(va, vb)] = result_pair['duplicates']
+    total_cross_dups = sum(len(d) for d in cross_version_dups.values())
+    print(f"  {len(cross_version_dups)} version pairs, {total_cross_dups} total duplicate pairs")
+
+    # Compute within-version duplicates (once)
+    print(f"Computing within-version duplicates...")
+    within_version_dups = {}
+    for v in versions_with_docs:
+        paths = version_embeddings[v]['file_path'].tolist()
+        vectors = version_embeddings[v].drop('file_path', axis=1).values
+        within_version_dups[v] = find_duplicates(paths, vectors, threshold)
+    total_within_dups = sum(len(d) for d in within_version_dups.values())
+    print(f"  {total_within_dups} total within-version duplicate pairs")
+
+    # For each pair boundary, compute training dups and leakage
+    print(f"\nComputing per-pair leakage stats...")
+    for idx, cr in enumerate(consecutive_results):
+        va = cr['version_a']
+        vb = cr['version_b']
+        va_idx = versions.index(va)
+        train_versions = [v for v in versions[:va_idx + 1] if v in version_embeddings]
+        test_version = vb
+
+        if test_version not in version_embeddings or not train_versions:
+            cr.update({
+                'training_set_size': 0, 'training_duplicate_pairs': 0,
+                'test_set_size': 0, 'test_entries_with_leakage': 0,
+                'test_leakage_percentage': 0.0, 'leakage_pairs': 0,
+            })
+            continue
+
+        train_size = sum(len(version_embeddings[v]) for v in train_versions)
+        test_size = len(version_embeddings[test_version])
+
+        # Within-training duplicates: cross-version + within-version
+        train_dups = []
+        for a in range(len(train_versions)):
+            train_dups.extend(within_version_dups.get(train_versions[a], []))
+            for b in range(a + 1, len(train_versions)):
+                key = (train_versions[a], train_versions[b])
+                train_dups.extend(cross_version_dups.get(key, []))
+
+        # Train-test leakage
+        leakage_dups = []
+        for tv in train_versions:
+            key = (tv, test_version)
+            leakage_dups.extend(cross_version_dups.get(key, []))
+
+        test_files_with_leakage = set(d['file_b'] for d in leakage_dups)
+        leakage_pct = round(len(test_files_with_leakage) / test_size * 100, 2) if test_size > 0 else 0
+
+        cr.update({
+            'training_set_size': train_size,
+            'training_duplicate_pairs': len(train_dups),
+            'test_set_size': test_size,
+            'test_entries_with_leakage': len(test_files_with_leakage),
+            'test_leakage_percentage': leakage_pct,
+            'leakage_pairs': len(leakage_dups),
+        })
+
+        print(f"  Pair {idx+1} ({va} vs {vb}): train={train_size} ({len(train_dups)} dups), "
+              f"test={test_size}, leakage={len(test_files_with_leakage)} files ({leakage_pct}%)")
+
+        # Save CSVs
+        if train_dups:
+            pd.DataFrame(train_dups).to_csv(f"{output_prefix}_pair{idx+1}_train_duplicates.csv", index=False)
+        if leakage_dups:
+            pd.DataFrame(leakage_dups).to_csv(f"{output_prefix}_pair{idx+1}_leakage.csv", index=False)
+
+    # Step 5: Overall summary
+    print(f"\n{'='*60}")
+    print("Step 5: Summary")
     print(f"{'='*60}")
     overall_stats = {
         'total_pairs_analyzed': len(consecutive_results),
         'total_duplicate_pairs': sum(r['duplicate_pairs'] for r in consecutive_results),
     }
 
-    # Step 5: Save cross-version metadata
+    # Step 6: Save cross-version metadata
     elapsed_time = time.time() - start_time
     metadata = {
         "repo_url": repo_url,
