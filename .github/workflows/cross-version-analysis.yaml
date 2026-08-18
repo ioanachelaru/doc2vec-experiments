@@ -56,6 +56,12 @@ on:
         default: '0.99'
         type: string
 
+      source_dir:
+        description: 'Subdirectory within repo to restrict file search (e.g., "django"). Leave empty for entire repo.'
+        required: false
+        default: ''
+        type: string
+
 jobs:
   cross-version-analysis:
     runs-on: ubuntu-latest
@@ -129,6 +135,12 @@ jobs:
             MAX_VER_FLAG="--max-versions ${{ github.event.inputs.max_versions }}"
           fi
 
+          SOURCE_DIR_FLAG=""
+          if [ -n "${{ github.event.inputs.source_dir }}" ]; then
+            SOURCE_DIR_FLAG="--source-dir ${{ github.event.inputs.source_dir }}"
+            echo "Source directory: ${{ github.event.inputs.source_dir }}"
+          fi
+
           python src/cross_version_pipeline.py \
             --repo "${{ github.event.inputs.repo_url }}" \
             --base-model "$BASE_MODEL" \
@@ -137,7 +149,7 @@ jobs:
             --output "${{ steps.repo_name.outputs.repo_name }}" \
             --epochs ${{ github.event.inputs.finetune_epochs }} \
             --threshold ${{ github.event.inputs.duplicate_threshold }} \
-            $VOCAB_FLAG $MAX_VER_FLAG
+            $VOCAB_FLAG $MAX_VER_FLAG $SOURCE_DIR_FLAG
 
       - name: Write Job Summary
         if: always()
@@ -176,7 +188,7 @@ jobs:
           | **Repository** | ${{ github.event.inputs.repo_url }} |
           | **Tag regex** | ${{ github.event.inputs.tag_regex }} |
           | **Versions analyzed** | ${VERSIONS} |
-          | **Training mode** | Cumulative (each pair uses same model) |
+          | **Embedding mode** | model.dv (deterministic) |
           | **Threshold** | ${{ github.event.inputs.duplicate_threshold }} |
           | **Total time** | ${ELAPSED} minutes |
           | **Total duplicate pairs** | ${TOTAL_DUPS} |

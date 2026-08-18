@@ -2,8 +2,8 @@
 """
 cross_version_pipeline.py
 =========================
-Cumulatively train a Doc2Vec model across project versions,
-generate embeddings for each version, and analyze cross-version duplicates.
+Train a Doc2Vec model on all project versions, extract deterministic
+embeddings from model.dv, and analyze cross-version duplicates + leakage.
 """
 
 import sys
@@ -19,14 +19,13 @@ from utils import (
     clone_repo,
     get_source_files,
     prepare_documents,
-    get_repo_name_from_url,
     get_version_tags,
     checkout_version,
 )
 from finetune_and_embed import (
     load_base_model,
     finetune_model,
-    generate_embeddings,
+    generate_embeddings_from_docvecs,
 )
 from analyze_duplicates import (
     find_cross_version_duplicates,
@@ -35,223 +34,179 @@ from analyze_duplicates import (
 )
 
 
-def run_cross_version_pipeline(
-    repo_url: str,
-    base_model_path: str,
-    tag_regex: str,
+def _prepare_version_documents(
+    repo_dir: Path,
+    versions: list[str],
     extensions: list[str],
-    output_prefix: str,
-    finetune_epochs: int = 10,
-    update_vocab: bool = True,
-    threshold: float = 0.99,
-    max_versions: int = None,
-) -> dict:
-    """Run the cross-version fine-tuning, embedding, and duplicate analysis pipeline.
+    source_dir: str | None,
+) -> tuple[dict, dict, list[str]]:
+    """Checkout each version and prepare tagged documents.
 
     Args:
-        repo_url: GitHub repository URL
-        base_model_path: Path to pre-trained base Doc2Vec model
-        tag_regex: Regex pattern for git tags (e.g., 'calcite-[0-9]+\\.[0-9]+\\.[0-9]+(-incubating)?$')
+        repo_dir: Path to the cloned repository
+        versions: List of version tags to process
         extensions: File extensions to include
-        output_prefix: Prefix for output files
-        finetune_epochs: Number of fine-tuning epochs
-        update_vocab: Whether to update vocabulary during fine-tuning
-        threshold: Cosine similarity threshold for duplicate detection
-        max_versions: Optional limit on number of versions to process
+        source_dir: Optional subdirectory to restrict file search
 
     Returns:
-        Dict with cross-version metadata and results
+        Tuple of (all_version_docs, files_per_version, versions_with_docs)
     """
-    start_time = time.time()
-
-    # Step 1: Full clone to access all tags
-    print(f"\n{'='*60}")
-    print("Step 1: Cloning repository (full clone for tag access)")
-    print(f"{'='*60}")
-    repo_dir = clone_repo(repo_url, shallow=False)
-
-    # Step 2: Extract and sort version tags
-    print(f"\n{'='*60}")
-    print("Step 2: Extracting version tags")
-    print(f"{'='*60}")
-    versions = get_version_tags(repo_dir, tag_regex)
-
-    if len(versions) < 2:
-        print(f"Error: Need at least 2 versions, found {len(versions)}")
-        shutil.rmtree(repo_dir, ignore_errors=True)
-        sys.exit(1)
-
-    if max_versions:
-        versions = versions[:max_versions]
-
-    print(f"Versions to process ({len(versions)}):")
-    for i, v in enumerate(versions):
-        print(f"  {i+1}. {v}")
-    print(f"Training mode: cumulative (each pair embedded with same model)")
-
-    # Step 3: Cumulative training, embedding, and pair analysis
-    # For each consecutive pair (vN, vN+1):
-    #   1. Train model on vN (cumulative)
-    #   2. Embed both vN and vN+1 with the same model
-    #   3. Compare the pair
-    # This ensures each consecutive pair uses the same embedding space.
-    print(f"\n{'='*60}")
-    print("Step 3: Cumulative training, embedding, and pair analysis")
-    print(f"{'='*60}")
-    model = load_base_model(base_model_path)
-
+    all_version_docs = {}
     files_per_version = {}
-    model_state_per_version = {}
-    consecutive_results = []
-    all_version_docs = {}  # keep docs in memory for end-of-pipeline leakage analysis
+    search_path = repo_dir / source_dir if source_dir else repo_dir
+
+    for v in versions:
+        checkout_version(repo_dir, v)
+        files = get_source_files(search_path, extensions)
+        docs = prepare_documents(files, repo_dir, tag_prefix=v)
+
+        if docs:
+            all_version_docs[v] = docs
+            files_per_version[v] = len(docs)
+            print(f"  {v}: {len(docs)} files")
+        else:
+            print(f"  {v}: no source files, skipping")
+            files_per_version[v] = 0
+
+    versions_with_docs = [v for v in versions if v in all_version_docs]
+    return all_version_docs, files_per_version, versions_with_docs
+
+
+def _analyze_consecutive_pairs(
+    version_embeddings: dict[str, pd.DataFrame],
+    versions: list[str],
+    threshold: float,
+    output_prefix: str,
+) -> list[dict]:
+    """Analyze duplicates between consecutive version pairs.
+
+    Args:
+        version_embeddings: Dict mapping version tag to embeddings DataFrame
+        versions: Ordered list of version tags
+        threshold: Cosine similarity threshold
+        output_prefix: Prefix for output CSV files
+
+    Returns:
+        List of per-pair result dicts with duplicate stats
+    """
+    print("\nAnalyzing consecutive version pairs...")
+    results = []
 
     for i in range(len(versions) - 1):
-        v_current = versions[i]
-        v_next = versions[i + 1]
-        trained_on = [versions[j] for j in range(i + 1) if files_per_version.get(versions[j], 0) != 0 or j == i]
+        va, vb = versions[i], versions[i + 1]
 
-        print(f"\n{'='*60}")
-        print(f"Pair {i+1}/{len(versions)-1}: {v_current} vs {v_next}")
-        print(f"{'='*60}")
-
-        # Train on current version
-        print(f"\nTraining on {v_current}...")
-        checkout_version(repo_dir, v_current)
-        files_current = get_source_files(repo_dir, extensions)
-        docs_current = prepare_documents(files_current, repo_dir, tag_prefix=v_current)
-
-        if not docs_current:
-            print(f"Warning: No source files in {v_current}, skipping pair")
-            files_per_version[v_current] = 0
-            continue
-
-        model = finetune_model(model, docs_current, epochs=finetune_epochs, update_vocab=update_vocab)
-        files_per_version[v_current] = len(docs_current)
-        model_state_per_version[v_current] = f"trained on: {', '.join(trained_on)}"
-        all_version_docs[v_current] = docs_current
-        print(f"Vocab size: {len(model.wv)}")
-
-        # Embed current version
-        print(f"\nEmbedding {v_current}...")
-        embeddings_current = generate_embeddings(model, docs_current)
-        csv_current = f"{output_prefix}_{v_current}_pair{i+1}_embeddings.csv"
-        embeddings_current.to_csv(csv_current, index=False)
-        print(f"Saved {len(embeddings_current)} embeddings to {csv_current}")
-
-        # Embed next version with the same model
-        print(f"\nEmbedding {v_next}...")
-        checkout_version(repo_dir, v_next)
-        files_next = get_source_files(repo_dir, extensions)
-        docs_next = prepare_documents(files_next, repo_dir, tag_prefix=v_next)
-
-        if not docs_next:
-            print(f"Warning: No source files in {v_next}, skipping pair")
-            files_per_version[v_next] = 0
-            continue
-
-        embeddings_next = generate_embeddings(model, docs_next)
-        files_per_version[v_next] = len(docs_next)
-        all_version_docs[v_next] = docs_next
-        csv_next = f"{output_prefix}_{v_next}_pair{i+1}_embeddings.csv"
-        embeddings_next.to_csv(csv_next, index=False)
-        print(f"Saved {len(embeddings_next)} embeddings to {csv_next}")
-
-        # Compare the pair (consecutive version comparison)
-        print(f"\nComparing {v_current} vs {v_next}...")
         result = find_cross_version_duplicates(
-            embeddings_current, embeddings_next,
-            v_current, v_next, threshold
+            version_embeddings[va],
+            version_embeddings[vb],
+            va,
+            vb,
+            threshold,
         )
 
-        pair_prefix = f"{output_prefix}_{v_current}_vs_{v_next}"
-        stats = generate_report(result['duplicates'], result['total_files'], threshold, pair_prefix)
+        pair_prefix = f"{output_prefix}_{va}_vs_{vb}"
+        stats = generate_report(
+            result["duplicates"], result["total_files"], threshold, pair_prefix
+        )
 
-        consecutive_results.append({
-            'version_a': v_current,
-            'version_b': v_next,
-            'model_trained_on': trained_on,
-            **stats
-        })
+        results.append({"version_a": va, "version_b": vb, **stats})
 
-    # Train on the last version to complete the cumulative model
-    last_v = versions[-1]
-    if files_per_version.get(last_v, 0) > 0:
-        print(f"\nTraining on final version {last_v}...")
-        checkout_version(repo_dir, last_v)
-        files_last = get_source_files(repo_dir, extensions)
-        docs_last = prepare_documents(files_last, repo_dir, tag_prefix=last_v)
-        if docs_last:
-            all_version_docs[last_v] = docs_last
-            model = finetune_model(model, docs_last, epochs=finetune_epochs, update_vocab=update_vocab)
+    return results
 
-    # Save final model
-    model_path = f"{output_prefix}_finetuned.d2v"
-    model.save(model_path)
-    print(f"\nFinal model saved to {model_path}")
 
-    # Cleanup the clone (docs are kept in memory for leakage analysis)
-    shutil.rmtree(repo_dir, ignore_errors=True)
+def _compute_all_pairwise_duplicates(
+    version_embeddings: dict[str, pd.DataFrame],
+    versions: list[str],
+    threshold: float,
+) -> dict[tuple[str, str], list[dict]]:
+    """Compute cross-version duplicates for all version pairs.
 
-    # Step 4: Train/Test Leakage Analysis
-    # Re-embed all versions with the final model so all embeddings share
-    # the same embedding space, then compute within-training duplicates
-    # and train-test leakage for each pair boundary.
-    print(f"\n{'='*60}")
-    print("Step 4: Train/Test Leakage Analysis")
-    print(f"{'='*60}")
+    Args:
+        version_embeddings: Dict mapping version tag to embeddings DataFrame
+        versions: Ordered list of version tags
+        threshold: Cosine similarity threshold
 
-    versions_with_docs = [v for v in versions if v in all_version_docs and all_version_docs[v]]
-    print(f"\nRe-embedding {len(versions_with_docs)} versions with final model...")
-
-    version_embeddings = {}
-    for v in versions_with_docs:
-        emb = generate_embeddings(model, all_version_docs[v])
-        version_embeddings[v] = emb
-        print(f"  {v}: {len(emb)} files")
-
-    # Free docs from memory now that we have embeddings
-    all_version_docs.clear()
-
-    # Compute all pairwise cross-version duplicates (once)
-    print(f"\nComputing all pairwise cross-version duplicates...")
+    Returns:
+        Dict mapping (version_a, version_b) tuples to lists of duplicate pairs
+    """
+    print("\nComputing all pairwise cross-version duplicates...")
     cross_version_dups = {}
-    for a in range(len(versions_with_docs)):
-        for b in range(a + 1, len(versions_with_docs)):
-            va, vb = versions_with_docs[a], versions_with_docs[b]
-            result_pair = find_cross_version_duplicates(
-                version_embeddings[va], version_embeddings[vb],
-                va, vb, threshold
+
+    for a in range(len(versions)):
+        for b in range(a + 1, len(versions)):
+            va, vb = versions[a], versions[b]
+            result = find_cross_version_duplicates(
+                version_embeddings[va],
+                version_embeddings[vb],
+                va,
+                vb,
+                threshold,
             )
-            cross_version_dups[(va, vb)] = result_pair['duplicates']
-    total_cross_dups = sum(len(d) for d in cross_version_dups.values())
-    print(f"  {len(cross_version_dups)} version pairs, {total_cross_dups} total duplicate pairs")
+            cross_version_dups[(va, vb)] = result["duplicates"]
 
-    # Compute within-version duplicates (once)
-    print(f"Computing within-version duplicates...")
-    within_version_dups = {}
-    for v in versions_with_docs:
-        paths = version_embeddings[v]['file_path'].tolist()
-        vectors = version_embeddings[v].drop('file_path', axis=1).values
-        within_version_dups[v] = find_duplicates(paths, vectors, threshold)
-    total_within_dups = sum(len(d) for d in within_version_dups.values())
-    print(f"  {total_within_dups} total within-version duplicate pairs")
+    total = sum(len(d) for d in cross_version_dups.values())
+    print(f"  {len(cross_version_dups)} version pairs, {total} total duplicate pairs")
+    return cross_version_dups
 
-    # For each pair boundary, compute training dups and leakage
-    print(f"\nComputing per-pair leakage stats...")
+
+def _compute_within_version_duplicates(
+    version_embeddings: dict[str, pd.DataFrame],
+    versions: list[str],
+    threshold: float,
+) -> dict[str, list[dict]]:
+    """Compute duplicates within each version.
+
+    Args:
+        version_embeddings: Dict mapping version tag to embeddings DataFrame
+        versions: List of version tags
+        threshold: Cosine similarity threshold
+
+    Returns:
+        Dict mapping version tag to list of duplicate pairs
+    """
+    print("Computing within-version duplicates...")
+    within_dups = {}
+
+    for v in versions:
+        paths = version_embeddings[v]["file_path"].tolist()
+        vectors = version_embeddings[v].drop("file_path", axis=1).values
+        within_dups[v] = find_duplicates(paths, vectors, threshold)
+
+    total = sum(len(d) for d in within_dups.values())
+    print(f"  {total} total within-version duplicate pairs")
+    return within_dups
+
+
+def _compute_leakage_stats(
+    consecutive_results: list[dict],
+    versions: list[str],
+    version_embeddings: dict[str, pd.DataFrame],
+    cross_version_dups: dict[tuple[str, str], list[dict]],
+    within_version_dups: dict[str, list[dict]],
+    output_prefix: str,
+) -> None:
+    """Compute train/test leakage stats for each consecutive pair boundary.
+
+    At each boundary (vN, vN+1), versions v1..vN form the training set and
+    vN+1 is the test set. Computes within-training duplicates and test entries
+    that have near-duplicates in the training set.
+
+    Updates consecutive_results dicts in-place with leakage fields.
+
+    Args:
+        consecutive_results: List of per-pair result dicts to update
+        versions: Ordered list of version tags
+        version_embeddings: Dict mapping version tag to embeddings DataFrame
+        cross_version_dups: All pairwise cross-version duplicate pairs
+        within_version_dups: Within-version duplicate pairs
+        output_prefix: Prefix for output CSV files
+    """
+    print("\nComputing per-pair leakage stats...")
+
     for idx, cr in enumerate(consecutive_results):
-        va = cr['version_a']
-        vb = cr['version_b']
-        va_idx = versions.index(va)
-        train_versions = [v for v in versions[:va_idx + 1] if v in version_embeddings]
+        va = cr["version_a"]
+        vb = cr["version_b"]
+        train_versions = versions[: versions.index(va) + 1]
         test_version = vb
-
-        if test_version not in version_embeddings or not train_versions:
-            cr.update({
-                'training_set_size': 0, 'training_duplicate_pairs': 0,
-                'test_set_size': 0, 'test_entries_with_leakage': 0,
-                'test_leakage_percentage': 0.0, 'leakage_pairs': 0,
-            })
-            continue
 
         train_size = sum(len(version_embeddings[v]) for v in train_versions)
         test_size = len(version_embeddings[test_version])
@@ -270,50 +225,202 @@ def run_cross_version_pipeline(
             key = (tv, test_version)
             leakage_dups.extend(cross_version_dups.get(key, []))
 
-        test_files_with_leakage = set(d['file_b'] for d in leakage_dups)
-        leakage_pct = round(len(test_files_with_leakage) / test_size * 100, 2) if test_size > 0 else 0
+        test_files_with_leakage = {d["file_b"] for d in leakage_dups}
+        leakage_pct = (
+            round(len(test_files_with_leakage) / test_size * 100, 2)
+            if test_size > 0
+            else 0
+        )
 
-        cr.update({
-            'training_set_size': train_size,
-            'training_duplicate_pairs': len(train_dups),
-            'test_set_size': test_size,
-            'test_entries_with_leakage': len(test_files_with_leakage),
-            'test_leakage_percentage': leakage_pct,
-            'leakage_pairs': len(leakage_dups),
-        })
+        cr.update(
+            {
+                "training_set_size": train_size,
+                "training_duplicate_pairs": len(train_dups),
+                "test_set_size": test_size,
+                "test_entries_with_leakage": len(test_files_with_leakage),
+                "test_leakage_percentage": leakage_pct,
+                "leakage_pairs": len(leakage_dups),
+            }
+        )
 
-        print(f"  Pair {idx+1} ({va} vs {vb}): train={train_size} ({len(train_dups)} dups), "
-              f"test={test_size}, leakage={len(test_files_with_leakage)} files ({leakage_pct}%)")
+        print(
+            f"  Pair {idx + 1} ({va} vs {vb}): train={train_size} ({len(train_dups)} dups), "
+            f"test={test_size}, leakage={len(test_files_with_leakage)} files ({leakage_pct}%)"
+        )
 
-        # Save CSVs
         if train_dups:
-            pd.DataFrame(train_dups).to_csv(f"{output_prefix}_pair{idx+1}_train_duplicates.csv", index=False)
+            pd.DataFrame(train_dups).to_csv(
+                f"{output_prefix}_pair{idx + 1}_train_duplicates.csv", index=False
+            )
         if leakage_dups:
-            pd.DataFrame(leakage_dups).to_csv(f"{output_prefix}_pair{idx+1}_leakage.csv", index=False)
+            pd.DataFrame(leakage_dups).to_csv(
+                f"{output_prefix}_pair{idx + 1}_leakage.csv", index=False
+            )
 
-    # Step 5: Overall summary
-    print(f"\n{'='*60}")
-    print("Step 5: Summary")
-    print(f"{'='*60}")
+
+def run_cross_version_pipeline(
+    repo_url: str,
+    base_model_path: str,
+    tag_regex: str,
+    extensions: list[str],
+    output_prefix: str,
+    finetune_epochs: int = 10,
+    update_vocab: bool = True,
+    threshold: float = 0.99,
+    max_versions: int = None,
+    source_dir: str = None,
+) -> dict:
+    """Run the cross-version embedding and duplicate analysis pipeline.
+
+    Trains a single Doc2Vec model on all versions, then extracts deterministic
+    embeddings from model.dv (no infer_vector randomness). Analyzes duplicates
+    between consecutive version pairs and computes train/test leakage.
+
+    Args:
+        repo_url: GitHub repository URL
+        base_model_path: Path to pre-trained base Doc2Vec model
+        tag_regex: Regex pattern for git tags
+        extensions: File extensions to include
+        output_prefix: Prefix for output files
+        finetune_epochs: Number of fine-tuning epochs
+        update_vocab: Whether to update vocabulary during fine-tuning
+        threshold: Cosine similarity threshold for duplicate detection
+        max_versions: Optional limit on number of versions to process
+        source_dir: Optional subdirectory to restrict file search (e.g., 'django')
+
+    Returns:
+        Dict with cross-version metadata and results
+    """
+    start_time = time.time()
+
+    # Step 1: Full clone to access all tags
+    print(f"\n{'=' * 60}")
+    print("Step 1: Cloning repository (full clone for tag access)")
+    print(f"{'=' * 60}")
+    repo_dir = clone_repo(repo_url, shallow=False)
+
+    # Step 2: Extract and sort version tags
+    print(f"\n{'=' * 60}")
+    print("Step 2: Extracting version tags")
+    print(f"{'=' * 60}")
+    versions = get_version_tags(repo_dir, tag_regex)
+
+    if len(versions) < 2:
+        print(f"Error: Need at least 2 versions, found {len(versions)}")
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        sys.exit(1)
+
+    if max_versions:
+        versions = versions[:max_versions]
+
+    print(f"Versions to process ({len(versions)}):")
+    for i, v in enumerate(versions):
+        print(f"  {i + 1}. {v}")
+    if source_dir:
+        print(f"Source directory: {source_dir}")
+    print("Embedding mode: model.dv (deterministic, all versions trained together)")
+
+    # Step 3: Prepare documents for all versions
+    print(f"\n{'=' * 60}")
+    print("Step 3: Preparing documents for all versions")
+    print(f"{'=' * 60}")
+
+    all_version_docs, files_per_version, versions_with_docs = (
+        _prepare_version_documents(repo_dir, versions, extensions, source_dir)
+    )
+
+    if len(versions_with_docs) < 2:
+        print(
+            f"Error: Need at least 2 versions with source files, "
+            f"found {len(versions_with_docs)}"
+        )
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        sys.exit(1)
+
+    shutil.rmtree(repo_dir, ignore_errors=True)
+
+    # Step 4: Train on all versions
+    print(f"\n{'=' * 60}")
+    print("Step 4: Training model on all versions")
+    print(f"{'=' * 60}")
+
+    all_docs = []
+    for v in versions_with_docs:
+        all_docs.extend(all_version_docs[v])
+
+    print(f"Total documents: {len(all_docs)} across {len(versions_with_docs)} versions")
+
+    model = load_base_model(base_model_path)
+    model = finetune_model(
+        model, all_docs, epochs=finetune_epochs, update_vocab=update_vocab
+    )
+    print(f"Final vocab size: {len(model.wv)}")
+
+    model_path = f"{output_prefix}_finetuned.d2v"
+    model.save(model_path)
+    print(f"Model saved to {model_path}")
+
+    # Step 5: Extract embeddings from model.dv
+    print(f"\n{'=' * 60}")
+    print("Step 5: Extracting embeddings from model.dv")
+    print(f"{'=' * 60}")
+
+    version_embeddings = {}
+    for v in versions_with_docs:
+        emb = generate_embeddings_from_docvecs(model, all_version_docs[v])
+        version_embeddings[v] = emb
+        csv_path = f"{output_prefix}_{v}_embeddings.csv"
+        emb.to_csv(csv_path, index=False)
+        print(f"  {v}: {len(emb)} embeddings -> {csv_path}")
+
+    all_version_docs.clear()
+
+    # Step 6: Duplicate & leakage analysis
+    print(f"\n{'=' * 60}")
+    print("Step 6: Duplicate & leakage analysis")
+    print(f"{'=' * 60}")
+
+    consecutive_results = _analyze_consecutive_pairs(
+        version_embeddings, versions_with_docs, threshold, output_prefix
+    )
+    cross_version_dups = _compute_all_pairwise_duplicates(
+        version_embeddings, versions_with_docs, threshold
+    )
+    within_version_dups = _compute_within_version_duplicates(
+        version_embeddings, versions_with_docs, threshold
+    )
+    _compute_leakage_stats(
+        consecutive_results,
+        versions_with_docs,
+        version_embeddings,
+        cross_version_dups,
+        within_version_dups,
+        output_prefix,
+    )
+
+    # Step 7: Summary & metadata
+    print(f"\n{'=' * 60}")
+    print("Step 7: Summary")
+    print(f"{'=' * 60}")
+
     overall_stats = {
-        'total_pairs_analyzed': len(consecutive_results),
-        'total_duplicate_pairs': sum(r['duplicate_pairs'] for r in consecutive_results),
+        "total_pairs_analyzed": len(consecutive_results),
+        "total_duplicate_pairs": sum(r["duplicate_pairs"] for r in consecutive_results),
     }
 
-    # Step 6: Save cross-version metadata
     elapsed_time = time.time() - start_time
     metadata = {
         "repo_url": repo_url,
         "tag_regex": tag_regex,
-        "versions_analyzed": versions,
+        "versions_analyzed": versions_with_docs,
         "files_per_version": files_per_version,
-        "training_mode": "cumulative",
-        "model_state_per_version": model_state_per_version,
+        "source_dir": source_dir,
+        "embedding_mode": "model.dv (deterministic)",
         "finetune_epochs": finetune_epochs,
         "threshold": threshold,
         "consecutive_pair_results": consecutive_results,
         "overall_result": overall_stats,
-        "training_approach": "train on v1..vN, embed vN and vN+1 with same model per pair",
+        "training_approach": "train on all versions, extract from model.dv",
         "elapsed_time_minutes": round(elapsed_time / 60, 1),
     }
 
@@ -322,12 +429,12 @@ def run_cross_version_pipeline(
         json.dump(metadata, f, indent=2)
     print(f"\nCross-version metadata saved to {metadata_path}")
 
-    print(f"\n{'='*60}")
-    print(f"Cross-version analysis complete!")
-    print(f"  Versions: {len(versions)}")
+    print(f"\n{'=' * 60}")
+    print("Cross-version analysis complete!")
+    print(f"  Versions: {len(versions_with_docs)}")
     print(f"  Total files: {sum(files_per_version.values())}")
-    print(f"  Total time: {elapsed_time/60:.1f} minutes")
-    print(f"{'='*60}")
+    print(f"  Total time: {elapsed_time / 60:.1f} minutes")
+    print(f"{'=' * 60}")
 
     return metadata
 
@@ -337,24 +444,46 @@ if __name__ == "__main__":
         description="Cross-version Doc2Vec duplicate analysis pipeline."
     )
     parser.add_argument("--repo", required=True, help="GitHub repository URL")
-    parser.add_argument("--base-model", required=True, help="Path to base Doc2Vec model")
-    parser.add_argument("--tag-regex", required=True, help="Regex for version tags (e.g., 'calcite-[0-9]+\\.[0-9]+\\.[0-9]+(-incubating)?$')")
-    parser.add_argument("--ext", nargs="+", default=[".java"], help="File extensions to include")
-    parser.add_argument("--output", default="cross_version", help="Output prefix for files")
+    parser.add_argument(
+        "--base-model", required=True, help="Path to base Doc2Vec model"
+    )
+    parser.add_argument(
+        "--tag-regex",
+        required=True,
+        help="Regex for version tags (e.g., '^[0-9]+\\.[0-9]+$')",
+    )
+    parser.add_argument(
+        "--ext", nargs="+", default=[".java"], help="File extensions to include"
+    )
+    parser.add_argument(
+        "--output", default="cross_version", help="Output prefix for files"
+    )
     parser.add_argument("--epochs", type=int, default=10, help="Fine-tuning epochs")
-    parser.add_argument("--no-vocab-update", action="store_true", help="Don't update vocabulary")
-    parser.add_argument("--threshold", type=float, default=0.99, help="Duplicate similarity threshold")
-    parser.add_argument("--max-versions", type=int, help="Max number of versions to process")
+    parser.add_argument(
+        "--no-vocab-update", action="store_true", help="Don't update vocabulary"
+    )
+    parser.add_argument(
+        "--threshold", type=float, default=0.99, help="Duplicate similarity threshold"
+    )
+    parser.add_argument(
+        "--max-versions", type=int, help="Max number of versions to process"
+    )
+    parser.add_argument(
+        "--source-dir",
+        help="Subdirectory within repo to restrict file search (e.g., 'django')",
+    )
 
     args = parser.parse_args()
 
-    print(f"   Cross-version duplicate analysis pipeline")
+    print("   Cross-version duplicate analysis pipeline")
     print(f"   Repository: {args.repo}")
     print(f"   Tag regex: {args.tag_regex}")
     print(f"   Base model: {args.base_model}")
     print(f"   Extensions: {args.ext}")
     print(f"   Fine-tune epochs: {args.epochs}")
     print(f"   Threshold: {args.threshold}")
+    if args.source_dir:
+        print(f"   Source dir: {args.source_dir}")
     if args.max_versions:
         print(f"   Max versions: {args.max_versions}")
     print()
@@ -369,4 +498,5 @@ if __name__ == "__main__":
         update_vocab=not args.no_vocab_update,
         threshold=args.threshold,
         max_versions=args.max_versions,
+        source_dir=args.source_dir,
     )
