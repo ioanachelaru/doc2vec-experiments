@@ -52,19 +52,13 @@ python src/finetune_and_embed.py --repo <url> --base-model base_model.d2v --ext 
   - Results displayed on job summary page
 - `.github/workflows/cross-version-analysis.yaml` - Cross-version duplicate analysis (requires existing base model artifact)
   - Inputs: `repo_url`, `tag_regex` (e.g., `^[0-9]+\.[0-9]+$`), `max_versions`, `duplicate_threshold`, `source_dir`, `base_model_run_id`
-  - Trains on all versions together, extracts deterministic embeddings from `model.dv`
+  - Trains cumulatively (one version at a time), extracts deterministic embeddings from `model.dv`
   - Train/test leakage analysis: at each pair boundary, reports within-training duplicates and test entries that have near-duplicates in the training set
   - Output: `*_embeddings.csv` (per version), `*_train_duplicates.csv` (within-training dups), `*_leakage.csv` (train-test leakage pairs)
   - Results displayed on job summary page with per-version and per-pair breakdowns
-- `.github/workflows/end-to-end-analysis.yaml` - Orchestrator: trains base model then runs cross-version analysis
-  - Job 1: trains base model on popular repos, uploads artifact
-  - Job 2: downloads base model, runs cross-version duplicate analysis
-  - Defaults configured for Django Python analysis
-  - No manual run ID copying needed — artifact passed between jobs automatically
-
 ### Constraints
 - GitHub API: max 1000 repos per search query
-- GitHub Actions: 6-hour timeout per job (12 hours total for end-to-end)
+- GitHub Actions: 6-hour timeout per job
 - Memory: Uses sub-batch training - splits large document sets into chunks of `--max-docs-per-batch 5000` to avoid OOM.
 - Gensim models: Doc2Vec saves multiple files (.d2v + .npy), must upload all with `base_model_*`
 - `*_repos.txt` files are gitignored (generated output, regenerate as needed)
