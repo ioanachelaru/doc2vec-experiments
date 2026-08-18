@@ -1,0 +1,334 @@
+name: End-to-End Analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      # Base model training inputs
+      language:
+        description: 'Programming language for popular repos'
+        required: true
+        default: 'python'
+        type: choice
+        options:
+          - java
+          - python
+          - javascript
+          - typescript
+          - go
+          - rust
+          - cpp
+          - csharp
+
+      organization:
+        description: 'GitHub organization for base model repos (empty = general popular repos)'
+        required: false
+        default: ''
+        type: string
+
+      repo_count:
+        description: 'Number of popular repos for base model (max 1k)'
+        required: true
+        default: '100'
+        type: string
+
+      file_extensions:
+        description: 'File extensions (space-separated, e.g., ".py" or ".java .scala")'
+        required: true
+        default: '.py'
+        type: string
+
+      vector_size:
+        description: 'Embedding dimension size'
+        required: false
+        default: '200'
+        type: string
+
+      base_model_epochs:
+        description: 'Base model training epochs'
+        required: false
+        default: '20'
+        type: string
+
+      # Cross-version analysis inputs
+      repo_url:
+        description: 'Target repository URL for cross-version analysis'
+        required: true
+        type: string
+        default: 'https://github.com/django/django.git'
+
+      tag_regex:
+        description: 'Regex for version tags (e.g., "^[0-9]+\.[0-9]+$")'
+        required: true
+        type: string
+        default: '^[0-9]+\.[0-9]+$'
+
+      max_versions:
+        description: 'Maximum versions to process (0 = all)'
+        required: false
+        default: '0'
+        type: string
+
+      finetune_epochs:
+        description: 'Fine-tuning epochs for cross-version training'
+        required: false
+        default: '10'
+        type: string
+
+      duplicate_threshold:
+        description: 'Cosine similarity threshold for duplicate detection'
+        required: false
+        default: '0.99'
+        type: string
+
+      source_dir:
+        description: 'Subdirectory within repo to restrict file search (e.g., "django"). Leave empty for entire repo.'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  train-base-model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Calculate optimal parameters
+        id: params
+        run: |
+          REPO_COUNT=${{ inputs.repo_count }}
+          MIN_STARS=500
+
+          if [ "$REPO_COUNT" -gt 200 ]; then
+            MIN_STARS=$((MIN_STARS / 2))
+          fi
+          if [ "$REPO_COUNT" -gt 400 ]; then
+            MIN_STARS=$((MIN_STARS / 4))
+          fi
+          if [ "$MIN_STARS" -lt 50 ]; then
+            MIN_STARS=50
+          fi
+
+          echo "min_stars=${MIN_STARS}" >> $GITHUB_OUTPUT
+
+      - name: Fetch popular repositories
+        run: |
+          ORG="${{ inputs.organization }}"
+          if [ -n "$ORG" ]; then
+            python src/get_popular_repos.py \
+              --language "${{ inputs.language }}" \
+              --count "${{ inputs.repo_count }}" \
+              --org "$ORG" \
+              --output popular_repos.txt
+          else
+            python src/get_popular_repos.py \
+              --language "${{ inputs.language }}" \
+              --count "${{ inputs.repo_count }}" \
+              --min-stars "${{ steps.params.outputs.min_stars }}" \
+              --output popular_repos.txt
+          fi
+
+          echo "Total repos: $(wc -l < popular_repos.txt)"
+
+      - name: Setup swap space
+        run: |
+          sudo fallocate -l 8G /swapfile2
+          sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2
+          sudo swapon /swapfile2
+
+      - name: Train base model
+        run: |
+          python src/train_base_model.py \
+            --repos popular_repos.txt \
+            --ext ${{ inputs.file_extensions }} \
+            --output "base_model_${{ inputs.language }}_${{ inputs.repo_count }}repos.d2v" \
+            --vector-size ${{ inputs.vector_size }} \
+            --epochs ${{ inputs.base_model_epochs }} \
+            --batch-size 5 \
+            --max-docs-per-batch 5000 \
+            --parallel-workers 4
+
+      - name: Upload base model
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-model-${{ inputs.language }}-${{ inputs.repo_count }}repos
+          path: |
+            base_model_*
+            popular_repos.txt
+          retention-days: 90
+
+  cross-version-analysis:
+    needs: train-base-model
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download base model artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: base-model-${{ inputs.language }}-${{ inputs.repo_count }}repos
+          path: ./base_model
+
+      - name: List base model files
+        run: |
+          echo "Base model files:"
+          ls -la ./base_model/
+
+      - name: Extract repository name
+        id: repo_name
+        run: |
+          REPO_NAME=$(echo "${{ inputs.repo_url }}" | sed 's|.*/||; s|\.git$||')
+          echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
+          echo "Repository name: ${REPO_NAME}"
+
+      - name: Setup swap space
+        run: |
+          sudo fallocate -l 8G /swapfile2
+          sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2
+          sudo swapon /swapfile2
+
+      - name: Run cross-version analysis
+        run: |
+          BASE_MODEL=$(find ./base_model -name "*.d2v" | head -1)
+          echo "Using base model: $BASE_MODEL"
+
+          MAX_VER_FLAG=""
+          if [ "${{ inputs.max_versions }}" != "0" ]; then
+            MAX_VER_FLAG="--max-versions ${{ inputs.max_versions }}"
+          fi
+
+          SOURCE_DIR_FLAG=""
+          if [ -n "${{ inputs.source_dir }}" ]; then
+            SOURCE_DIR_FLAG="--source-dir ${{ inputs.source_dir }}"
+            echo "Source directory: ${{ inputs.source_dir }}"
+          fi
+
+          python src/cross_version_pipeline.py \
+            --repo "${{ inputs.repo_url }}" \
+            --base-model "$BASE_MODEL" \
+            --tag-regex "${{ inputs.tag_regex }}" \
+            --ext ${{ inputs.file_extensions }} \
+            --output "${{ steps.repo_name.outputs.repo_name }}" \
+            --epochs ${{ inputs.finetune_epochs }} \
+            --threshold ${{ inputs.duplicate_threshold }} \
+            $MAX_VER_FLAG $SOURCE_DIR_FLAG
+
+      - name: Write Job Summary
+        if: always()
+        run: |
+          METADATA_FILE="${{ steps.repo_name.outputs.repo_name }}_cross_version_metadata.json"
+
+          if [ -f "$METADATA_FILE" ]; then
+            VERSIONS=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(len(m['versions_analyzed']))")
+            TOTAL_FILES=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(sum(m['files_per_version'].values()))")
+            ELAPSED=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(m['elapsed_time_minutes'])")
+            TOTAL_DUPS=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(m['overall_result'].get('total_duplicate_pairs', 'N/A'))")
+
+            VERSION_TABLE=$(python -c "
+          import json
+          m = json.load(open('$METADATA_FILE'))
+          for v, count in m['files_per_version'].items():
+              print(f'| {v} | {count} |')
+          ")
+
+            PAIRS_TABLE=$(python -c "
+          import json
+          m = json.load(open('$METADATA_FILE'))
+          for r in m['consecutive_pair_results']:
+              print(f'| {r[\"version_a\"]} vs {r[\"version_b\"]} | {r[\"training_set_size\"]} | {r[\"training_duplicate_pairs\"]} | {r[\"test_set_size\"]} | {r[\"test_entries_with_leakage\"]} | {r[\"test_leakage_percentage\"]}% | {r[\"duplicate_pairs\"]} | {r[\"exact_duplicate_pairs\"]} |')
+          ")
+
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+          # End-to-End Analysis Report
+
+          ## Base Model
+          | Setting | Value |
+          |---------|-------|
+          | **Language** | ${{ inputs.language }} |
+          | **Repos** | ${{ inputs.repo_count }} |
+          | **Vector size** | ${{ inputs.vector_size }} |
+
+          ## Cross-Version Analysis
+
+          | Setting | Value |
+          |---------|-------|
+          | **Repository** | ${{ inputs.repo_url }} |
+          | **Tag regex** | ${{ inputs.tag_regex }} |
+          | **Versions analyzed** | ${VERSIONS} |
+          | **Embedding mode** | model.dv (deterministic) |
+          | **Threshold** | ${{ inputs.duplicate_threshold }} |
+          | **Total time** | ${ELAPSED} minutes |
+          | **Total duplicate pairs** | ${TOTAL_DUPS} |
+
+          ## Files per Version
+
+          | Version | Files |
+          |---------|-------|
+          ${VERSION_TABLE}
+          | **Total** | **${TOTAL_FILES}** |
+
+          ## Consecutive Version Pairs
+
+          | Pair | Train Files | Train Dups | Test Files | Test Leakage | Leakage % | Consec. Dups | Exact Dups |
+          |------|-------------|------------|------------|--------------|-----------|--------------|------------|
+          ${PAIRS_TABLE}
+
+          ---
+          *Generated by [doc2vec-experiments](https://github.com/${{ github.repository }})*
+          EOF
+          else
+            echo "## End-to-End Analysis" >> $GITHUB_STEP_SUMMARY
+            echo "Analysis did not complete successfully. Check logs for details." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-version-${{ steps.repo_name.outputs.repo_name }}
+          path: |
+            ${{ steps.repo_name.outputs.repo_name }}_*
+          retention-days: 90
