@@ -7,7 +7,7 @@ on:
         description: 'GitHub repository URL to analyze'
         required: true
         type: string
-        default: 'https://github.com/your-org/your-repo.git'
+        default: 'https://github.com/django/django.git'
 
       repo_version:
         description: 'Specific version to checkout (commit SHA, tag, or branch). Leave empty for latest'
@@ -21,15 +21,15 @@ on:
         type: string
 
       base_model_artifact:
-        description: 'Name of the base model artifact (e.g., "base-model-java")'
+        description: 'Name of the base model artifact (e.g., "base-model-python")'
         required: true
-        default: 'base-model-java'
+        default: 'base-model-python'
         type: string
 
       file_extensions:
         description: 'File extensions (space-separated, e.g., ".java .scala")'
         required: true
-        default: '.java'
+        default: '.py'
         type: string
 
       finetune_epochs:
@@ -48,6 +48,12 @@ on:
         description: 'Cosine similarity threshold for duplicate detection'
         required: false
         default: '0.99'
+        type: string
+
+      source_dir:
+        description: 'Subdirectory within repo to restrict file search (e.g., "django"). Leave empty for entire repo.'
+        required: false
+        default: 'django'
         type: string
 
 
@@ -110,6 +116,13 @@ jobs:
             echo "Using version: ${{ github.event.inputs.repo_version }}"
           fi
 
+          # Set source dir flag if provided
+          SOURCE_DIR_FLAG=""
+          if [ -n "${{ github.event.inputs.source_dir }}" ]; then
+            SOURCE_DIR_FLAG="--source-dir ${{ github.event.inputs.source_dir }}"
+            echo "Source directory: ${{ github.event.inputs.source_dir }}"
+          fi
+
           # Run fine-tuning
           python src/finetune_and_embed.py \
             --repo "${{ github.event.inputs.repo_url }}" \
@@ -118,7 +131,8 @@ jobs:
             --output "${{ steps.repo_name.outputs.repo_name }}" \
             --epochs ${{ github.event.inputs.finetune_epochs }} \
             $VOCAB_FLAG \
-            $VERSION_FLAG
+            $VERSION_FLAG \
+            $SOURCE_DIR_FLAG
 
       - name: Analyze duplicates
         id: duplicates

@@ -5,20 +5,16 @@ finetune_and_embed.py
 Fine-tune an existing Doc2Vec model on a new repository and generate embeddings.
 """
 
-import sys
-import shutil
-from pathlib import Path
-from tqdm import tqdm
-import pandas as pd
-from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 import argparse
 import json
+import shutil
+import sys
 
-from utils import (
-    clone_repo,
-    get_source_files,
-    prepare_documents
-)
+import pandas as pd
+from gensim.models.doc2vec import Doc2Vec
+from tqdm import tqdm
+
+from utils import clone_repo, get_source_files, prepare_documents
 
 
 def load_base_model(model_path: str) -> Doc2Vec:
@@ -30,10 +26,7 @@ def load_base_model(model_path: str) -> Doc2Vec:
 
 
 def finetune_model(
-    model: Doc2Vec,
-    documents: list,
-    epochs: int = 10,
-    update_vocab: bool = True
+    model: Doc2Vec, documents: list, epochs: int = 10, update_vocab: bool = True
 ) -> Doc2Vec:
     """Fine-tune the model on new documents."""
     print(f"Fine-tuning model on {len(documents)} new documents...")
@@ -61,7 +54,45 @@ def generate_embeddings(model: Doc2Vec, documents: list) -> pd.DataFrame:
         vec = model.infer_vector(doc.words, epochs=20)
         data.append([doc.tags[0]] + vec.tolist())
 
-    df = pd.DataFrame(data, columns=["file_path"] + [f"dim_{i}" for i in range(model.vector_size)])
+    df = pd.DataFrame(
+        data, columns=["file_path"] + [f"dim_{i}" for i in range(model.vector_size)]
+    )
+    return df
+
+
+def generate_embeddings_from_docvecs(model: Doc2Vec, documents: list) -> pd.DataFrame:
+    """Extract stored embeddings from model.dv for training documents.
+
+    Unlike generate_embeddings() which uses infer_vector (non-deterministic),
+    this retrieves the deterministic document vectors learned during training.
+    All documents must have been part of the training data.
+
+    Args:
+        model: Trained Doc2Vec model containing document vectors
+        documents: List of TaggedDocument objects whose tags exist in model.dv
+
+    Returns:
+        DataFrame with file_path column and dim_0..dim_N embedding columns
+    """
+    data = []
+    missing = []
+
+    for doc in documents:
+        tag = doc.tags[0]
+        if tag in model.dv:
+            vec = model.dv[tag]
+            data.append([tag] + vec.tolist())
+        else:
+            missing.append(tag)
+
+    if missing:
+        print(
+            f"Warning: {len(missing)} documents not found in model.dv (first 5: {missing[:5]})"
+        )
+
+    df = pd.DataFrame(
+        data, columns=["file_path"] + [f"dim_{i}" for i in range(model.vector_size)]
+    )
     return df
 
 
@@ -71,7 +102,7 @@ def save_outputs(
     output_prefix: str,
     repo_url: str,
     base_model_path: str,
-    version: str = None
+    version: str = None,
 ):
     """Save the fine-tuned model, embeddings, and metadata."""
     # Save embeddings
@@ -90,7 +121,7 @@ def save_outputs(
         "finetuned_on": repo_url,
         "total_documents": len(embeddings_df),
         "vector_size": model.vector_size,
-        "vocab_size": len(model.wv)
+        "vocab_size": len(model.wv),
     }
 
     if version:
@@ -109,7 +140,8 @@ def run_pipeline(
     output_prefix: str,
     finetune_epochs: int = 10,
     update_vocab: bool = True,
-    version: str = None
+    version: str = None,
+    source_dir: str = None,
 ):
     """Run the complete fine-tuning and embedding pipeline."""
     # Load base model
@@ -117,7 +149,8 @@ def run_pipeline(
 
     # Clone and process repository
     repo_dir = clone_repo(repo_url, version=version)
-    source_files = get_source_files(repo_dir, extensions)
+    search_path = repo_dir / source_dir if source_dir else repo_dir
+    source_files = get_source_files(search_path, extensions)
 
     if not source_files:
         print("Error: No source files found. Check your extensions or repo path.")
@@ -128,13 +161,17 @@ def run_pipeline(
     documents = prepare_documents(source_files, repo_dir, tag_prefix=None)
 
     # Fine-tune model
-    model = finetune_model(model, documents, epochs=finetune_epochs, update_vocab=update_vocab)
+    model = finetune_model(
+        model, documents, epochs=finetune_epochs, update_vocab=update_vocab
+    )
 
     # Generate embeddings
     embeddings_df = generate_embeddings(model, documents)
 
     # Save outputs
-    save_outputs(model, embeddings_df, output_prefix, repo_url, base_model_path, version)
+    save_outputs(
+        model, embeddings_df, output_prefix, repo_url, base_model_path, version
+    )
 
     # Cleanup
     shutil.rmtree(repo_dir, ignore_errors=True)
@@ -143,14 +180,30 @@ def run_pipeline(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Fine-tune Doc2Vec model and generate embeddings.")
-    parser.add_argument("--repo", required=True, help="GitHub repository URL to analyze")
-    parser.add_argument("--base-model", required=True, help="Path to base Doc2Vec model")
-    parser.add_argument("--ext", nargs="+", default=[".java"], help="File extensions to include")
+    parser = argparse.ArgumentParser(
+        description="Fine-tune Doc2Vec model and generate embeddings."
+    )
+    parser.add_argument(
+        "--repo", required=True, help="GitHub repository URL to analyze"
+    )
+    parser.add_argument(
+        "--base-model", required=True, help="Path to base Doc2Vec model"
+    )
+    parser.add_argument(
+        "--ext", nargs="+", default=[".java"], help="File extensions to include"
+    )
     parser.add_argument("--output", default="finetuned", help="Output prefix for files")
     parser.add_argument("--epochs", type=int, default=10, help="Fine-tuning epochs")
-    parser.add_argument("--no-vocab-update", action="store_true", help="Don't update vocabulary")
-    parser.add_argument("--version", help="Specific version (commit SHA, tag, or branch) to checkout")
+    parser.add_argument(
+        "--no-vocab-update", action="store_true", help="Don't update vocabulary"
+    )
+    parser.add_argument(
+        "--version", help="Specific version (commit SHA, tag, or branch) to checkout"
+    )
+    parser.add_argument(
+        "--source-dir",
+        help="Subdirectory within repo to restrict file search (e.g., 'django')",
+    )
 
     args = parser.parse_args()
 
@@ -161,5 +214,6 @@ if __name__ == "__main__":
         args.output,
         finetune_epochs=args.epochs,
         update_vocab=not args.no_vocab_update,
-        version=args.version
+        version=args.version,
+        source_dir=args.source_dir,
     )

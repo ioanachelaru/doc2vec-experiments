@@ -12,8 +12,8 @@ A GitHub Actions-powered pipeline for training Doc2Vec models on source code. Us
 
 ### Core Scripts (src/)
 - `train_base_model.py` - Train base model on multiple popular GitHub repos
-- `finetune_and_embed.py` - Fine-tune pre-trained model and generate embeddings (single version)
-- `cross_version_pipeline.py` - Cumulative training across versions, embed each version, analyze cross-version duplicates + train/test leakage
+- `finetune_and_embed.py` - Fine-tune pre-trained model and generate embeddings (single version). Supports `--source-dir` for subdirectory filtering.
+- `cross_version_pipeline.py` - Train on all versions, extract deterministic embeddings from `model.dv`, analyze cross-version duplicates + train/test leakage. Supports `--source-dir` for subdirectory filtering.
 - `get_popular_repos.py` - Fetch popular repos from GitHub API (supports `--org` for organization filtering)
 - `analyze_duplicates.py` - Find duplicate/near-duplicate embeddings (single-version and cross-version)
 - `utils.py` - Shared utilities (clone_repo, tokenize_code, prepare_documents, get_version_tags)
@@ -47,14 +47,14 @@ python src/finetune_and_embed.py --repo <url> --base-model base_model.d2v --ext 
 ### GitHub Actions Workflows
 - `.github/workflows/train-base-model.yaml` - Train base model (supports `organization` input, job summary on completion)
 - `.github/workflows/finetune-model.yaml` - Fine-tune, embed, analyze duplicates (single version)
-  - Inputs: `duplicate_threshold` (default 0.99)
+  - Inputs: `duplicate_threshold` (default 0.99), `source_dir` (optional subdirectory filter)
   - Automatically runs duplicate analysis after embedding
   - Results displayed on job summary page
 - `.github/workflows/cross-version-analysis.yaml` - Cross-version duplicate analysis
-  - Inputs: `repo_url`, `tag_regex` (e.g., `calcite-[0-9]+\.[0-9]+\.[0-9]+(-incubating)?$`), `max_versions`, `duplicate_threshold`
-  - Cumulatively trains across versions, embeds each version, analyzes consecutive pairs
-  - Train/test leakage analysis: at each iteration, reports within-training duplicates and test entries that have near-duplicates in the training set
-  - Output: `*_train_duplicates.csv` (within-training dups), `*_leakage.csv` (train-test leakage pairs)
+  - Inputs: `repo_url`, `tag_regex` (e.g., `^[0-9]+\.[0-9]+$`), `max_versions`, `duplicate_threshold`, `source_dir`
+  - Trains on all versions together, extracts deterministic embeddings from `model.dv`
+  - Train/test leakage analysis: at each pair boundary, reports within-training duplicates and test entries that have near-duplicates in the training set
+  - Output: `*_embeddings.csv` (per version), `*_train_duplicates.csv` (within-training dups), `*_leakage.csv` (train-test leakage pairs)
   - Results displayed on job summary page with per-version and per-pair breakdowns
 
 ### Constraints
@@ -84,12 +84,22 @@ Output: `*_duplicates.csv` (pairs), `*_metadata.json` (stats)
 
 ### Cross-Version Analysis
 ```bash
-# Full pipeline: fine-tune on first tag, embed all versions, analyze duplicates
+# Java example (Apache Calcite)
 python src/cross_version_pipeline.py \
   --repo https://github.com/apache/calcite.git \
   --base-model base_model.d2v \
   --tag-regex "calcite-[0-9]+\.[0-9]+\.[0-9]+(-incubating)?$" \
   --ext .java \
+  --threshold 0.99 \
+  --max-versions 5
+
+# Python example (Django, restricted to django/ subdirectory)
+python src/cross_version_pipeline.py \
+  --repo https://github.com/django/django.git \
+  --base-model base_model_python.d2v \
+  --tag-regex "^[0-9]+\.[0-9]+$" \
+  --ext .py \
+  --source-dir django \
   --threshold 0.99 \
   --max-versions 5
 ```
@@ -99,12 +109,13 @@ Output per pair: `*_{tagA}_vs_{tagB}_duplicates.csv`
 Train/test analysis: `*_pair{N}_train_duplicates.csv`, `*_pair{N}_leakage.csv`
 Metadata: `*_cross_version_metadata.json` (includes leakage stats per pair)
 
+**Embedding mode:** Uses `model.dv` for deterministic embeddings (no `infer_vector` randomness). All versions are trained together so every document has a stored vector.
+
 ## Current Task (HRIA)
-- Train Doc2Vec on Apache Java repos (X=100)
-- Measure total classes and training time
-- Calibrate X to stay within 6-hour Actions limit
-- Generate embeddings for SDP benchmark datasets
-- Analyze duplicates and compare with CodeBERT results
+- Train Doc2Vec on popular Python repos (X=100) for Django experiments
+- Run cross-version analysis on Django (`--source-dir django`, `--tag-regex "^[0-9]+\.[0-9]+$"`)
+- Compare with Apache Java (Calcite) results and CodeBERT findings
+- Analyze duplicates across versions and measure train/test leakage
 
 ## Dependencies
 Python 3.10+: gensim, pandas, tqdm, scikit-learn, requests

@@ -6,7 +6,7 @@ on:
       language:
         description: 'Programming language for popular repos'
         required: true
-        default: 'java'
+        default: 'python'
         type: choice
         options:
           - java
@@ -21,7 +21,7 @@ on:
       organization:
         description: 'GitHub organization to fetch repos from (e.g., "apache"). Leave empty for general popular repos.'
         required: false
-        default: 'apache'
+        default: ''
         type: string
 
       repo_count:
@@ -33,7 +33,7 @@ on:
       file_extensions:
         description: 'File extensions (space-separated, e.g., ".java .scala")'
         required: true
-        default: '.java'
+        default: '.py'
         type: string
 
       vector_size:
