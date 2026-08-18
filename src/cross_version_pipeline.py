@@ -34,24 +34,34 @@ from analyze_duplicates import (
 )
 
 
-def _prepare_version_documents(
+def _train_cumulatively(
+    model,
     repo_dir: Path,
     versions: list[str],
     extensions: list[str],
     source_dir: str | None,
-) -> tuple[dict, dict, list[str]]:
-    """Checkout each version and prepare tagged documents.
+    finetune_epochs: int,
+    update_vocab: bool,
+) -> tuple[dict[str, list[str]], dict[str, int], list[str]]:
+    """Checkout each version, train cumulatively, and store document tags.
+
+    Trains on one version at a time to limit memory usage. After training,
+    only the tag strings are kept — vectors are stored in model.dv.
 
     Args:
+        model: Base Doc2Vec model to fine-tune
         repo_dir: Path to the cloned repository
         versions: List of version tags to process
         extensions: File extensions to include
         source_dir: Optional subdirectory to restrict file search
+        finetune_epochs: Number of training epochs per version
+        update_vocab: Whether to update vocabulary with new words
 
     Returns:
-        Tuple of (all_version_docs, files_per_version, versions_with_docs)
+        Tuple of (version_tags, files_per_version, versions_with_docs)
+        where version_tags maps version -> list of document tag strings
     """
-    all_version_docs = {}
+    version_tags = {}
     files_per_version = {}
     search_path = repo_dir / source_dir if source_dir else repo_dir
 
@@ -60,16 +70,20 @@ def _prepare_version_documents(
         files = get_source_files(search_path, extensions)
         docs = prepare_documents(files, repo_dir, tag_prefix=v)
 
-        if docs:
-            all_version_docs[v] = docs
-            files_per_version[v] = len(docs)
-            print(f"  {v}: {len(docs)} files")
-        else:
+        if not docs:
             print(f"  {v}: no source files, skipping")
             files_per_version[v] = 0
+            continue
 
-    versions_with_docs = [v for v in versions if v in all_version_docs]
-    return all_version_docs, files_per_version, versions_with_docs
+        model = finetune_model(
+            model, docs, epochs=finetune_epochs, update_vocab=update_vocab
+        )
+        version_tags[v] = [doc.tags[0] for doc in docs]
+        files_per_version[v] = len(docs)
+        print(f"  {v}: {len(docs)} files, vocab={len(model.wv)}")
+
+    versions_with_docs = [v for v in versions if v in version_tags]
+    return version_tags, files_per_version, versions_with_docs
 
 
 def _analyze_consecutive_pairs(
@@ -272,9 +286,10 @@ def run_cross_version_pipeline(
 ) -> dict:
     """Run the cross-version embedding and duplicate analysis pipeline.
 
-    Trains a single Doc2Vec model on all versions, then extracts deterministic
-    embeddings from model.dv (no infer_vector randomness). Analyzes duplicates
-    between consecutive version pairs and computes train/test leakage.
+    Cumulatively trains a Doc2Vec model across versions (one at a time to limit
+    memory), then extracts deterministic embeddings from model.dv (no
+    infer_vector randomness). Analyzes duplicates between consecutive version
+    pairs and computes train/test leakage.
 
     Args:
         repo_url: GitHub repository URL
@@ -318,15 +333,24 @@ def run_cross_version_pipeline(
         print(f"  {i + 1}. {v}")
     if source_dir:
         print(f"Source directory: {source_dir}")
-    print("Embedding mode: model.dv (deterministic, all versions trained together)")
+    print("Embedding mode: model.dv (deterministic, cumulative training)")
 
-    # Step 3: Prepare documents for all versions
+    # Step 3: Cumulative training across versions
+    # Train one version at a time to limit memory. After training each version,
+    # only tag strings are kept — vectors are stored in model.dv.
     print(f"\n{'=' * 60}")
-    print("Step 3: Preparing documents for all versions")
+    print("Step 3: Cumulative training across versions")
     print(f"{'=' * 60}")
 
-    all_version_docs, files_per_version, versions_with_docs = (
-        _prepare_version_documents(repo_dir, versions, extensions, source_dir)
+    model = load_base_model(base_model_path)
+    version_tags, files_per_version, versions_with_docs = _train_cumulatively(
+        model,
+        repo_dir,
+        versions,
+        extensions,
+        source_dir,
+        finetune_epochs,
+        update_vocab,
     )
 
     if len(versions_with_docs) < 2:
@@ -339,45 +363,30 @@ def run_cross_version_pipeline(
 
     shutil.rmtree(repo_dir, ignore_errors=True)
 
-    # Step 4: Train on all versions
-    print(f"\n{'=' * 60}")
-    print("Step 4: Training model on all versions")
-    print(f"{'=' * 60}")
-
-    all_docs = []
-    for v in versions_with_docs:
-        all_docs.extend(all_version_docs[v])
-
-    print(f"Total documents: {len(all_docs)} across {len(versions_with_docs)} versions")
-
-    model = load_base_model(base_model_path)
-    model = finetune_model(
-        model, all_docs, epochs=finetune_epochs, update_vocab=update_vocab
-    )
+    total_docs = sum(len(tags) for tags in version_tags.values())
+    print(f"\nTotal documents: {total_docs} across {len(versions_with_docs)} versions")
     print(f"Final vocab size: {len(model.wv)}")
 
     model_path = f"{output_prefix}_finetuned.d2v"
     model.save(model_path)
     print(f"Model saved to {model_path}")
 
-    # Step 5: Extract embeddings from model.dv
+    # Step 4: Extract embeddings from model.dv
     print(f"\n{'=' * 60}")
-    print("Step 5: Extracting embeddings from model.dv")
+    print("Step 4: Extracting embeddings from model.dv")
     print(f"{'=' * 60}")
 
     version_embeddings = {}
     for v in versions_with_docs:
-        emb = generate_embeddings_from_docvecs(model, all_version_docs[v])
+        emb = generate_embeddings_from_docvecs(model, version_tags[v])
         version_embeddings[v] = emb
         csv_path = f"{output_prefix}_{v}_embeddings.csv"
         emb.to_csv(csv_path, index=False)
         print(f"  {v}: {len(emb)} embeddings -> {csv_path}")
 
-    all_version_docs.clear()
-
-    # Step 6: Duplicate & leakage analysis
+    # Step 5: Duplicate & leakage analysis
     print(f"\n{'=' * 60}")
-    print("Step 6: Duplicate & leakage analysis")
+    print("Step 5: Duplicate & leakage analysis")
     print(f"{'=' * 60}")
 
     consecutive_results = _analyze_consecutive_pairs(
@@ -398,9 +407,9 @@ def run_cross_version_pipeline(
         output_prefix,
     )
 
-    # Step 7: Summary & metadata
+    # Step 6: Summary & metadata
     print(f"\n{'=' * 60}")
-    print("Step 7: Summary")
+    print("Step 6: Summary")
     print(f"{'=' * 60}")
 
     overall_stats = {

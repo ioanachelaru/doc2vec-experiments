@@ -60,16 +60,16 @@ def generate_embeddings(model: Doc2Vec, documents: list) -> pd.DataFrame:
     return df
 
 
-def generate_embeddings_from_docvecs(model: Doc2Vec, documents: list) -> pd.DataFrame:
-    """Extract stored embeddings from model.dv for training documents.
+def generate_embeddings_from_docvecs(model: Doc2Vec, tags: list[str]) -> pd.DataFrame:
+    """Extract stored embeddings from model.dv by document tag.
 
     Unlike generate_embeddings() which uses infer_vector (non-deterministic),
     this retrieves the deterministic document vectors learned during training.
-    All documents must have been part of the training data.
+    All tags must have been part of the training data.
 
     Args:
         model: Trained Doc2Vec model containing document vectors
-        documents: List of TaggedDocument objects whose tags exist in model.dv
+        tags: List of document tags to extract vectors for
 
     Returns:
         DataFrame with file_path column and dim_0..dim_N embedding columns
@@ -77,8 +77,7 @@ def generate_embeddings_from_docvecs(model: Doc2Vec, documents: list) -> pd.Data
     data = []
     missing = []
 
-    for doc in documents:
-        tag = doc.tags[0]
+    for tag in tags:
         if tag in model.dv:
             vec = model.dv[tag]
             data.append([tag] + vec.tolist())
@@ -87,7 +86,7 @@ def generate_embeddings_from_docvecs(model: Doc2Vec, documents: list) -> pd.Data
 
     if missing:
         print(
-            f"Warning: {len(missing)} documents not found in model.dv (first 5: {missing[:5]})"
+            f"Warning: {len(missing)} tags not found in model.dv (first 5: {missing[:5]})"
         )
 
     df = pd.DataFrame(
