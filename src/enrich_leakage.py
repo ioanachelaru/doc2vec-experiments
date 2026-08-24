@@ -108,6 +108,20 @@ def enrich_pair(
     buggy_leak_pct = round(leaked_buggy / test_buggy * 100, 2) if test_buggy > 0 else 0
     clean_leak_pct = round(leaked_clean / test_clean * 100, 2) if test_clean > 0 else 0
 
+    # Split by duplicate_type if column exists
+    has_type = "duplicate_type" in df.columns
+    if has_type:
+        sf = df[df["duplicate_type"] == "same_file"]
+        co = df[df["duplicate_type"] == "collision"]
+        sf_files = sf.drop_duplicates(subset="file_b")
+        co_files = co.drop_duplicates(subset="file_b")
+        sf_buggy = int((sf_files["label_b"] == "buggy").sum())
+        sf_clean = int((sf_files["label_b"] == "clean").sum())
+        co_buggy = int((co_files["label_b"] == "buggy").sum())
+        co_clean = int((co_files["label_b"] == "clean").sum())
+    else:
+        sf_buggy = sf_clean = co_buggy = co_clean = 0
+
     summary = {
         "pair": pair_idx,
         "version_a": version_a,
@@ -122,13 +136,24 @@ def enrich_pair(
         "leaked_diff_label_pairs": diff_label,
         "buggy_leak_pct": buggy_leak_pct,
         "clean_leak_pct": clean_leak_pct,
+        "same_file_leaked_buggy": sf_buggy,
+        "same_file_leaked_clean": sf_clean,
+        "collision_leaked_buggy": co_buggy,
+        "collision_leaked_clean": co_clean,
     }
+
+    type_info = ""
+    if has_type:
+        type_info = (
+            f" [same_file={sf_buggy}B/{sf_clean}C, collision={co_buggy}B/{co_clean}C]"
+        )
 
     print(
         f"  Pair {pair_idx} ({version_a} vs {version_b}): "
         f"test={test_total} ({test_buggy}B/{test_clean}C), "
         f"leaked={leaked_total} ({leaked_buggy}B/{leaked_clean}C), "
         f"buggy_leak={buggy_leak_pct}%, clean_leak={clean_leak_pct}%"
+        f"{type_info}"
     )
 
     return summary
