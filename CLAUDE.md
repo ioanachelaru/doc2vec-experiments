@@ -16,6 +16,7 @@ A GitHub Actions-powered pipeline for training Doc2Vec models on source code. Us
 - `cross_version_pipeline.py` - Train on all versions, extract deterministic embeddings from `model.dv`, analyze cross-version duplicates + train/test leakage. Supports `--source-dir` for subdirectory filtering.
 - `get_popular_repos.py` - Fetch popular repos from GitHub API (supports `--org` for organization filtering)
 - `analyze_duplicates.py` - Find duplicate/near-duplicate embeddings (single-version and cross-version)
+- `enrich_leakage.py` - Join cross-version leakage pairs with bug labels (buggy/clean) from SDP datasets
 - `utils.py` - Shared utilities (clone_repo, tokenize_code, prepare_documents, get_version_tags)
 
 ### Key Patterns
@@ -109,6 +110,18 @@ Train/test analysis: `*_pair{N}_train_duplicates.csv`, `*_pair{N}_leakage.csv`
 Metadata: `*_cross_version_metadata.json` (includes leakage stats per pair)
 
 **Embedding mode:** Uses `model.dv` for deterministic embeddings (no `infer_vector` randomness). All versions are trained together so every document has a stored vector.
+
+### Enriching Leakage with Bug Labels
+```bash
+# After cross-version analysis, join leakage pairs with SDP labels
+python src/enrich_leakage.py \
+  --metadata django_cross_version_metadata.json \
+  --labels-dir "resources/django 1/file_level" \
+  --output-prefix django
+```
+
+Input: `*_pair{N}_leakage.csv` (from cross-version pipeline) + `django-{version}.csv` label files
+Output: `*_pair{N}_leakage_labeled.csv` (enriched with `label_a`, `label_b`, `same_label`), `*_leakage_summary.csv` (per-pair breakdown by label)
 
 ## Current Task (HRIA)
 - Train Doc2Vec on popular Python repos (X=100) for Django experiments
