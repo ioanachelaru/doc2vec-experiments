@@ -24,13 +24,15 @@ def load_embeddings(csv_path: str) -> tuple[list[str], np.ndarray]:
     """
     print(f"Loading embeddings from {csv_path}...")
     df = pd.read_csv(csv_path)
-    file_paths = df['file_path'].tolist()
-    vectors = df.drop('file_path', axis=1).values
+    file_paths = df["file_path"].tolist()
+    vectors = df.drop("file_path", axis=1).values
     print(f"Loaded {len(file_paths)} embeddings with {vectors.shape[1]} dimensions")
     return file_paths, vectors
 
 
-def find_duplicates(file_paths: list[str], vectors: np.ndarray, threshold: float = 0.99) -> list[dict]:
+def find_duplicates(
+    file_paths: list[str], vectors: np.ndarray, threshold: float = 0.99
+) -> list[dict]:
     """Find pairs of embeddings with similarity >= threshold.
 
     Args:
@@ -52,23 +54,36 @@ def find_duplicates(file_paths: list[str], vectors: np.ndarray, threshold: float
     for i in range(n):
         for j in range(i + 1, n):
             if sim_matrix[i, j] >= threshold:
-                duplicates.append({
-                    'file_a': file_paths[i],
-                    'file_b': file_paths[j],
-                    'similarity': float(sim_matrix[i, j])
-                })
+                # Strip version prefix if present to compare paths
+                rel_a = (
+                    file_paths[i].split("/", 1)[1]
+                    if "/" in file_paths[i]
+                    else file_paths[i]
+                )
+                rel_b = (
+                    file_paths[j].split("/", 1)[1]
+                    if "/" in file_paths[j]
+                    else file_paths[j]
+                )
+                duplicates.append(
+                    {
+                        "file_a": file_paths[i],
+                        "file_b": file_paths[j],
+                        "similarity": float(sim_matrix[i, j]),
+                        "duplicate_type": "same_file"
+                        if rel_a == rel_b
+                        else "collision",
+                    }
+                )
 
     # Sort by similarity descending
-    duplicates.sort(key=lambda x: x['similarity'], reverse=True)
+    duplicates.sort(key=lambda x: x["similarity"], reverse=True)
 
     return duplicates
 
 
 def generate_report(
-    duplicates: list[dict],
-    total_files: int,
-    threshold: float,
-    output_prefix: str
+    duplicates: list[dict], total_files: int, threshold: float, output_prefix: str
 ):
     """Generate duplicate analysis report.
 
@@ -83,18 +98,22 @@ def generate_report(
     exact_duplicates = 0
 
     for d in duplicates:
-        unique_files_in_duplicates.add(d['file_a'])
-        unique_files_in_duplicates.add(d['file_b'])
-        if d['similarity'] >= 0.9999:  # Effectively 1.0
+        unique_files_in_duplicates.add(d["file_a"])
+        unique_files_in_duplicates.add(d["file_b"])
+        if d["similarity"] >= 0.9999:  # Effectively 1.0
             exact_duplicates += 1
 
     stats = {
-        'total_files': total_files,
-        'duplicate_pairs': len(duplicates),
-        'exact_duplicate_pairs': exact_duplicates,
-        'files_with_duplicates': len(unique_files_in_duplicates),
-        'percentage_files_with_duplicates': round(len(unique_files_in_duplicates) / total_files * 100, 2) if total_files > 0 else 0,
-        'threshold': threshold
+        "total_files": total_files,
+        "duplicate_pairs": len(duplicates),
+        "exact_duplicate_pairs": exact_duplicates,
+        "files_with_duplicates": len(unique_files_in_duplicates),
+        "percentage_files_with_duplicates": round(
+            len(unique_files_in_duplicates) / total_files * 100, 2
+        )
+        if total_files > 0
+        else 0,
+        "threshold": threshold,
     }
 
     # Print summary to console
@@ -119,7 +138,7 @@ def generate_report(
         # Show top 10 duplicates
         print("\nTop 10 duplicate pairs:")
         for i, d in enumerate(duplicates[:10]):
-            print(f"  {i+1}. {d['file_a']}")
+            print(f"  {i + 1}. {d['file_a']}")
             print(f"     {d['file_b']}")
             print(f"     Similarity: {d['similarity']:.6f}")
     else:
@@ -139,7 +158,7 @@ def find_cross_version_duplicates(
     df_b: pd.DataFrame,
     version_a: str,
     version_b: str,
-    threshold: float = 0.99
+    threshold: float = 0.99,
 ) -> dict:
     """Find duplicates between two versions' embeddings.
 
@@ -156,31 +175,41 @@ def find_cross_version_duplicates(
     Returns:
         Dict with 'duplicates' list, 'total_files', and version labels
     """
-    paths_a = df_a['file_path'].tolist()
-    paths_b = df_b['file_path'].tolist()
-    vectors_a = df_a.drop('file_path', axis=1).values
-    vectors_b = df_b.drop('file_path', axis=1).values
+    paths_a = df_a["file_path"].tolist()
+    paths_b = df_b["file_path"].tolist()
+    vectors_a = df_a.drop("file_path", axis=1).values
+    vectors_b = df_b.drop("file_path", axis=1).values
 
-    print(f"Computing cross-version similarity: {version_a} ({len(paths_a)} files) vs {version_b} ({len(paths_b)} files)...")
+    print(
+        f"Computing cross-version similarity: {version_a} ({len(paths_a)} files) vs {version_b} ({len(paths_b)} files)..."
+    )
     sim_matrix = cosine_similarity(vectors_a, vectors_b)
 
     duplicates = []
     for i in range(len(paths_a)):
         for j in range(len(paths_b)):
             if sim_matrix[i, j] >= threshold:
-                duplicates.append({
-                    'file_a': paths_a[i],
-                    'file_b': paths_b[j],
-                    'similarity': float(sim_matrix[i, j])
-                })
+                # Compare paths after version prefix to classify
+                rel_a = paths_a[i].split("/", 1)[1] if "/" in paths_a[i] else paths_a[i]
+                rel_b = paths_b[j].split("/", 1)[1] if "/" in paths_b[j] else paths_b[j]
+                duplicates.append(
+                    {
+                        "file_a": paths_a[i],
+                        "file_b": paths_b[j],
+                        "similarity": float(sim_matrix[i, j]),
+                        "duplicate_type": "same_file"
+                        if rel_a == rel_b
+                        else "collision",
+                    }
+                )
 
-    duplicates.sort(key=lambda x: x['similarity'], reverse=True)
+    duplicates.sort(key=lambda x: x["similarity"], reverse=True)
 
     return {
-        'duplicates': duplicates,
-        'total_files': len(paths_a) + len(paths_b),
-        'version_a': version_a,
-        'version_b': version_b,
+        "duplicates": duplicates,
+        "total_files": len(paths_a) + len(paths_b),
+        "version_a": version_a,
+        "version_b": version_b,
     }
 
 
@@ -189,27 +218,22 @@ def main():
         description="Analyze embeddings for duplicate/near-duplicate pairs."
     )
     parser.add_argument(
-        "--embeddings",
-        help="Path to embeddings CSV file (single-version mode)"
+        "--embeddings", help="Path to embeddings CSV file (single-version mode)"
     )
     parser.add_argument(
-        "--embeddings-a",
-        help="Path to first embeddings CSV (cross-version mode)"
+        "--embeddings-a", help="Path to first embeddings CSV (cross-version mode)"
     )
     parser.add_argument(
-        "--embeddings-b",
-        help="Path to second embeddings CSV (cross-version mode)"
+        "--embeddings-b", help="Path to second embeddings CSV (cross-version mode)"
     )
     parser.add_argument(
         "--threshold",
         type=float,
         default=0.99,
-        help="Minimum cosine similarity to consider as duplicate (default: 0.99)"
+        help="Minimum cosine similarity to consider as duplicate (default: 0.99)",
     )
     parser.add_argument(
-        "--output",
-        default="duplicates_report",
-        help="Output prefix for report files"
+        "--output", default="duplicates_report", help="Output prefix for report files"
     )
 
     args = parser.parse_args()
@@ -221,15 +245,21 @@ def main():
         version_a = Path(args.embeddings_a).stem.replace("_embeddings", "")
         version_b = Path(args.embeddings_b).stem.replace("_embeddings", "")
 
-        result = find_cross_version_duplicates(df_a, df_b, version_a, version_b, args.threshold)
-        generate_report(result['duplicates'], result['total_files'], args.threshold, args.output)
+        result = find_cross_version_duplicates(
+            df_a, df_b, version_a, version_b, args.threshold
+        )
+        generate_report(
+            result["duplicates"], result["total_files"], args.threshold, args.output
+        )
     elif args.embeddings:
         # Single-version mode
         file_paths, vectors = load_embeddings(args.embeddings)
         duplicates = find_duplicates(file_paths, vectors, args.threshold)
         generate_report(duplicates, len(file_paths), args.threshold, args.output)
     else:
-        parser.error("Provide either --embeddings or both --embeddings-a and --embeddings-b")
+        parser.error(
+            "Provide either --embeddings or both --embeddings-a and --embeddings-b"
+        )
 
     print("\nDuplicate analysis complete!")
 

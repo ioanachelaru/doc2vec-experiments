@@ -246,6 +246,16 @@ def _compute_leakage_stats(
             else 0
         )
 
+        # Split by duplicate type
+        same_file_leakage = [
+            d for d in leakage_dups if d.get("duplicate_type") == "same_file"
+        ]
+        collision_leakage = [
+            d for d in leakage_dups if d.get("duplicate_type") == "collision"
+        ]
+        same_file_test = {d["file_b"] for d in same_file_leakage}
+        collision_test = {d["file_b"] for d in collision_leakage}
+
         cr.update(
             {
                 "training_set_size": train_size,
@@ -254,12 +264,17 @@ def _compute_leakage_stats(
                 "test_entries_with_leakage": len(test_files_with_leakage),
                 "test_leakage_percentage": leakage_pct,
                 "leakage_pairs": len(leakage_dups),
+                "same_file_leakage_files": len(same_file_test),
+                "collision_leakage_files": len(collision_test),
+                "same_file_leakage_pairs": len(same_file_leakage),
+                "collision_leakage_pairs": len(collision_leakage),
             }
         )
 
         print(
             f"  Pair {idx + 1} ({va} vs {vb}): train={train_size} ({len(train_dups)} dups), "
-            f"test={test_size}, leakage={len(test_files_with_leakage)} files ({leakage_pct}%)"
+            f"test={test_size}, leakage={len(test_files_with_leakage)} files ({leakage_pct}%) "
+            f"[same_file={len(same_file_test)}, collision={len(collision_test)}]"
         )
 
         if train_dups:
