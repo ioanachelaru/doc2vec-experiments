@@ -54,23 +54,6 @@ on:
         default: '500'
         type: string
 
-      batch_size:
-        description: 'Number of repos to process per batch'
-        required: false
-        default: '5'
-        type: string
-
-      max_docs_per_batch:
-        description: 'Max documents per training sub-batch (memory limit)'
-        required: false
-        default: '5000'
-        type: string
-
-      parallel_workers:
-        description: 'Number of parallel workers for processing'
-        required: false
-        default: '4'
-        type: string
 
 jobs:
   train-base-model:
@@ -122,8 +105,7 @@ jobs:
           echo "📊 Adjusted parameters:"
           echo "   Repo count: $REPO_COUNT"
           echo "   Min stars: $MIN_STARS"
-          echo "   Batch size: ${{ github.event.inputs.batch_size }}"
-          echo "   Parallel workers: ${{ github.event.inputs.parallel_workers }}"
+          echo "   Vector size: ${{ github.event.inputs.vector_size }}"
 
       - name: Fetch popular repositories
         run: |
@@ -173,10 +155,7 @@ jobs:
             --ext ${{ github.event.inputs.file_extensions }} \
             --output "base_model_${{ github.event.inputs.language }}_${{ github.event.inputs.repo_count }}repos.d2v" \
             --vector-size ${{ github.event.inputs.vector_size }} \
-            --epochs ${{ github.event.inputs.epochs }} \
-            --batch-size ${{ github.event.inputs.batch_size }} \
-            --max-docs-per-batch ${{ github.event.inputs.max_docs_per_batch }} \
-            --parallel-workers ${{ github.event.inputs.parallel_workers }}
+            --epochs ${{ github.event.inputs.epochs }}
 
       - name: Write Job Summary
         if: always()
@@ -211,8 +190,6 @@ jobs:
           | **Repositories** | ${{ github.event.inputs.repo_count }} |
           | **Vector size** | ${{ github.event.inputs.vector_size }} |
           | **Epochs** | ${{ github.event.inputs.epochs }} |
-          | **Batch size** | ${{ github.event.inputs.batch_size }} repos |
-          | **Max docs/batch** | ${{ github.event.inputs.max_docs_per_batch }} |
 
           ## Results
 
