@@ -6,7 +6,6 @@ Train a base Doc2Vec model on multiple popular GitHub repositories.
 This model can later be fine-tuned on specific repositories.
 """
 
-import os
 import sys
 import shutil
 from pathlib import Path
@@ -16,13 +15,12 @@ import argparse
 import json
 import time
 from multiprocessing import Pool, cpu_count
-import traceback
 
 from utils import (
     clone_repo,
     get_source_files,
     prepare_documents,
-    get_repo_name_from_url
+    get_repo_name_from_url,
 )
 
 
@@ -85,10 +83,12 @@ def train_base_model(
     if parallel_workers is None:
         parallel_workers = min(4, cpu_count() or 1)
 
-    print(f"\nProcessing {len(repo_urls)} repositories with {parallel_workers} parallel workers...")
+    print(
+        f"\nProcessing {len(repo_urls)} repositories with {parallel_workers} parallel workers..."
+    )
     print(f"Batch size: {batch_size} repos per batch")
     print(f"Max documents per training batch: {max_docs_per_batch}")
-    print(f"Training incrementally in sub-batches to save memory\n")
+    print("Training incrementally in sub-batches to save memory\n")
 
     # Process repositories in batches with incremental training
     model = None
@@ -99,18 +99,24 @@ def train_base_model(
         batch_repos = repo_urls[batch_start:batch_end]
         batch_num = batch_start // batch_size + 1
 
-        print(f"\n{'='*60}")
-        print(f"Processing batch {batch_num} (repos {batch_start+1}-{batch_end}/{len(repo_urls)})")
-        print(f"{'='*60}")
+        print(f"\n{'=' * 60}")
+        print(
+            f"Processing batch {batch_num} (repos {batch_start + 1}-{batch_end}/{len(repo_urls)})"
+        )
+        print(f"{'=' * 60}")
 
-        # Process batch in parallel
+        # Use Pool only before the model exists — forking after gensim's
+        # C structures are in memory causes SIGSEGV on child exit.
         batch_documents = []
-        with Pool(processes=parallel_workers) as pool:
-            args_list = [(repo, extensions) for repo in batch_repos]
-            results = pool.map(process_repository, args_list)
-
-            for docs in results:
-                batch_documents.extend(docs)
+        if model is None and parallel_workers > 1:
+            with Pool(processes=parallel_workers) as pool:
+                args_list = [(repo, extensions) for repo in batch_repos]
+                results = pool.map(process_repository, args_list)
+                for docs in results:
+                    batch_documents.extend(docs)
+        else:
+            for repo in batch_repos:
+                batch_documents.extend(process_repository((repo, extensions)))
 
         if not batch_documents:
             print(f"⚠ No documents in batch {batch_num}, skipping...")
@@ -121,23 +127,31 @@ def train_base_model(
 
         # Keep first 100 documents for sample embeddings
         if len(sample_documents) < 100:
-            sample_documents.extend(batch_documents[:100 - len(sample_documents)])
+            sample_documents.extend(batch_documents[: 100 - len(sample_documents)])
 
-        print(f"\nBatch complete: {len(batch_documents)} documents from {len(batch_repos)} repos")
+        print(
+            f"\nBatch complete: {len(batch_documents)} documents from {len(batch_repos)} repos"
+        )
         print(f"Total progress: {total_processed}/{len(repo_urls)} repos processed")
         print(f"Total documents so far: {total_document_count}")
 
         # Sub-batch documents for memory efficiency
-        num_sub_batches = (len(batch_documents) + max_docs_per_batch - 1) // max_docs_per_batch
-        print(f"Training in {num_sub_batches} sub-batch(es) of max {max_docs_per_batch} docs each...")
+        num_sub_batches = (
+            len(batch_documents) + max_docs_per_batch - 1
+        ) // max_docs_per_batch
+        print(
+            f"Training in {num_sub_batches} sub-batch(es) of max {max_docs_per_batch} docs each..."
+        )
 
         for sub_idx in range(0, len(batch_documents), max_docs_per_batch):
-            sub_batch = batch_documents[sub_idx:sub_idx + max_docs_per_batch]
+            sub_batch = batch_documents[sub_idx : sub_idx + max_docs_per_batch]
             sub_num = sub_idx // max_docs_per_batch + 1
 
             if model is None:
                 # First sub-batch ever: create model and train
-                print(f"  Sub-batch {sub_num}/{num_sub_batches}: Creating model with {len(sub_batch)} docs...")
+                print(
+                    f"  Sub-batch {sub_num}/{num_sub_batches}: Creating model with {len(sub_batch)} docs..."
+                )
                 model = Doc2Vec(
                     sub_batch,
                     vector_size=vector_size,
@@ -150,14 +164,18 @@ def train_base_model(
                 print(f"  ✓ Model created with vocab size: {len(model.wv)}")
             else:
                 # Subsequent sub-batches: update vocab and train incrementally
-                print(f"  Sub-batch {sub_num}/{num_sub_batches}: Training on {len(sub_batch)} docs...")
+                print(
+                    f"  Sub-batch {sub_num}/{num_sub_batches}: Training on {len(sub_batch)} docs..."
+                )
                 old_vocab_size = len(model.wv)
                 model.build_vocab(sub_batch, update=True)
                 new_vocab_size = len(model.wv)
                 if new_vocab_size > old_vocab_size:
-                    print(f"    Vocab: {old_vocab_size} → {new_vocab_size} (+{new_vocab_size - old_vocab_size})")
+                    print(
+                        f"    Vocab: {old_vocab_size} → {new_vocab_size} (+{new_vocab_size - old_vocab_size})"
+                    )
                 model.train(sub_batch, total_examples=len(sub_batch), epochs=epochs)
-                print(f"  ✓ Trained")
+                print("  ✓ Trained")
 
             # Clear sub-batch to free memory
             del sub_batch
@@ -165,16 +183,22 @@ def train_base_model(
         # Clear batch documents to free memory
         del batch_documents
 
-    print(f"\n{'='*60}")
-    print(f"✅ Base model training complete")
+    print(f"\n{'=' * 60}")
+    print("✅ Base model training complete")
     print(f"   Total documents: {total_document_count}")
     print(f"   Final vocab size: {len(model.wv)}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     return model, sample_documents, total_document_count
 
 
-def save_model_and_metadata(model: Doc2Vec, sample_documents: list, total_document_count: int, output_path: str, repo_urls: list[str]):
+def save_model_and_metadata(
+    model: Doc2Vec,
+    sample_documents: list,
+    total_document_count: int,
+    output_path: str,
+    repo_urls: list[str],
+):
     """Save the model and metadata about training repos."""
     # Save the model
     model.save(output_path)
@@ -189,7 +213,9 @@ def save_model_and_metadata(model: Doc2Vec, sample_documents: list, total_docume
         "min_count": model.min_count,
         "training_epochs": model.epochs,
         "vocab_size": len(model.wv),
-        "unique_repos": len(set(doc.tags[0].split("/")[0] for doc in sample_documents)) if sample_documents else 0
+        "unique_repos": len(set(doc.tags[0].split("/")[0] for doc in sample_documents))
+        if sample_documents
+        else 0,
     }
 
     metadata_path = Path(output_path).with_suffix(".json")
@@ -198,7 +224,9 @@ def save_model_and_metadata(model: Doc2Vec, sample_documents: list, total_docume
     print(f"Metadata saved to {metadata_path}")
 
     # Save sample embeddings from base model
-    sample_df = export_sample_embeddings(model, sample_documents)  # Use saved sample docs
+    sample_df = export_sample_embeddings(
+        model, sample_documents
+    )  # Use saved sample docs
     sample_path = Path(output_path).with_suffix(".sample.csv")
     sample_df.to_csv(sample_path, index=False)
     print(f"Sample embeddings saved to {sample_path}")
@@ -211,7 +239,9 @@ def export_sample_embeddings(model: Doc2Vec, documents: list) -> pd.DataFrame:
         vec = model.infer_vector(doc.words)
         data.append([doc.tags[0]] + vec.tolist())
 
-    df = pd.DataFrame(data, columns=["file_path"] + [f"dim_{i}" for i in range(model.vector_size)])
+    df = pd.DataFrame(
+        data, columns=["file_path"] + [f"dim_{i}" for i in range(model.vector_size)]
+    )
     return df
 
 
@@ -222,17 +252,41 @@ def load_repo_list(repo_file: str) -> list[str]:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train base Doc2Vec model on multiple repositories.")
-    parser.add_argument("--repos", help="File containing repository URLs (one per line)")
+    parser = argparse.ArgumentParser(
+        description="Train base Doc2Vec model on multiple repositories."
+    )
+    parser.add_argument(
+        "--repos", help="File containing repository URLs (one per line)"
+    )
     parser.add_argument("--repo-urls", nargs="+", help="Repository URLs directly")
-    parser.add_argument("--ext", nargs="+", default=[".java"], help="File extensions to include")
+    parser.add_argument(
+        "--ext", nargs="+", default=[".java"], help="File extensions to include"
+    )
     parser.add_argument("--output", default="base_model.d2v", help="Output model file")
-    parser.add_argument("--vector-size", type=int, default=200, help="Embedding dimension")
+    parser.add_argument(
+        "--vector-size", type=int, default=200, help="Embedding dimension"
+    )
     parser.add_argument("--epochs", type=int, default=20, help="Training epochs")
-    parser.add_argument("--batch-size", type=int, default=10, help="Number of repos to process per batch")
-    parser.add_argument("--max-docs-per-batch", type=int, default=5000, help="Max documents per training sub-batch")
-    parser.add_argument("--parallel-workers", type=int, help="Number of parallel workers (default: auto)")
-    parser.add_argument("--max-repos", type=int, help="Maximum number of repos to process (for testing)")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=10,
+        help="Number of repos to process per batch",
+    )
+    parser.add_argument(
+        "--max-docs-per-batch",
+        type=int,
+        default=5000,
+        help="Max documents per training sub-batch",
+    )
+    parser.add_argument(
+        "--parallel-workers",
+        type=int,
+        help="Number of parallel workers (default: auto)",
+    )
+    parser.add_argument(
+        "--max-repos", type=int, help="Maximum number of repos to process (for testing)"
+    )
 
     args = parser.parse_args()
 
@@ -247,9 +301,9 @@ if __name__ == "__main__":
 
     # Limit repos if requested (useful for testing)
     if args.max_repos:
-        repo_urls = repo_urls[:args.max_repos]
+        repo_urls = repo_urls[: args.max_repos]
 
-    print(f"   Starting base model training")
+    print("   Starting base model training")
     print(f"   Repositories: {len(repo_urls)}")
     print(f"   Extensions: {args.ext}")
     print(f"   Vector size: {args.vector_size}")
@@ -267,13 +321,15 @@ if __name__ == "__main__":
         epochs=args.epochs,
         batch_size=args.batch_size,
         max_docs_per_batch=args.max_docs_per_batch,
-        parallel_workers=args.parallel_workers
+        parallel_workers=args.parallel_workers,
     )
 
-    save_model_and_metadata(model, sample_documents, total_document_count, args.output, repo_urls)
+    save_model_and_metadata(
+        model, sample_documents, total_document_count, args.output, repo_urls
+    )
 
     elapsed_time = time.time() - start_time
-    print(f"   Base model training pipeline finished successfully!")
-    print(f"   Total time: {elapsed_time/60:.1f} minutes")
+    print("   Base model training pipeline finished successfully!")
+    print(f"   Total time: {elapsed_time / 60:.1f} minutes")
     print(f"   Documents processed: {total_document_count}")
     print(f"   Model saved to: {args.output}")
