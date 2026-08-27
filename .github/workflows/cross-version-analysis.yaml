@@ -13,7 +13,7 @@ on:
         description: 'Regex for version tags (e.g., "^[0-9]+\.[0-9]+$" for Django)'
         required: true
         type: string
-        default: 'calcite-[0-9]+\.[0-9]+\.[0-9]+(-incubating)?$'
+        default: 'calcite-1\.([0-9]|1[0-5])\.0(-incubating)?$'
 
       max_versions:
         description: 'Maximum versions to process (0 = all)'
