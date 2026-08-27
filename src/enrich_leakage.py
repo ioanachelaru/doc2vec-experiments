@@ -21,13 +21,13 @@ def load_labels(labels_dir: Path, version: str) -> dict[str, str]:
     """Load bug labels for a single version.
 
     Args:
-        labels_dir: Directory containing django-{version}.csv files
+        labels_dir: Directory containing {version}.csv label files
         version: Version string (e.g., '1.0')
 
     Returns:
         Dict mapping filepath -> label ('buggy' or 'clean')
     """
-    label_file = labels_dir / f"django-{version}.csv"
+    label_file = labels_dir / f"{version}.csv"
     if not label_file.exists():
         return {}
     df = pd.read_csv(label_file)
@@ -185,7 +185,7 @@ def run(metadata_path: str, labels_dir: str, output_prefix: str) -> None:
         va, vb = pair["version_a"], pair["version_b"]
 
         # Check if label files exist for this pair's test version
-        if not (labels_path / f"django-{vb}.csv").exists():
+        if not (labels_path / f"{vb}.csv").exists():
             skipped.append(f"{va} vs {vb} (no labels for {vb})")
             continue
 
@@ -231,7 +231,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--labels-dir",
         required=True,
-        help="Directory containing django-{version}.csv label files",
+        help="Directory containing {version}.csv label files",
     )
     parser.add_argument(
         "--output-prefix",
