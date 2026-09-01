@@ -616,7 +616,7 @@ def run_method_level_pipeline(
         "data_dir": str(data_dir),
         "versions_analyzed": versions_with_docs,
         "methods_per_version": methods_per_version,
-        "embedding_mode": "infer_vector (seed=42, epochs=200)",
+        "embedding_mode": "infer_vector (epochs=200)",
         "finetune_epochs": epochs,
         "threshold": threshold,
         "consecutive_pair_results": consecutive_results,
