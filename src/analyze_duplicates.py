@@ -44,7 +44,7 @@ def find_duplicates(
         List of duplicate pairs with their similarity scores
     """
     print(f"Computing cosine similarity matrix for {len(file_paths)} embeddings...")
-    sim_matrix = cosine_similarity(vectors)
+    sim_matrix = np.clip(cosine_similarity(vectors), -1.0, 1.0)
 
     print(f"Finding duplicate pairs with similarity >= {threshold}...")
     duplicates = []
@@ -183,7 +183,7 @@ def find_cross_version_duplicates(
     print(
         f"Computing cross-version similarity: {version_a} ({len(paths_a)} files) vs {version_b} ({len(paths_b)} files)..."
     )
-    sim_matrix = cosine_similarity(vectors_a, vectors_b)
+    sim_matrix = np.clip(cosine_similarity(vectors_a, vectors_b), -1.0, 1.0)
 
     duplicates = []
     for i in range(len(paths_a)):

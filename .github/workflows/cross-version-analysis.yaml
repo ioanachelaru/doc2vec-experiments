@@ -186,14 +186,26 @@ jobs:
               print(f'| {v} | {count} |')
           ")
 
-            # Build consecutive pairs table
+            # Build leakage table (combined with labels if available)
+            SUMMARY_FILE="${{ steps.repo_name.outputs.repo_name }}_leakage_summary.csv"
             PAIRS_TABLE=$(python -c "
-          import json
+          import json, csv, os
           m = json.load(open('$METADATA_FILE'))
+          summary = {}
+          if os.path.exists('$SUMMARY_FILE'):
+              with open('$SUMMARY_FILE') as f:
+                  for r in csv.DictReader(f):
+                      summary[(r['version_a'], r['version_b'])] = r
           for r in m['consecutive_pair_results']:
-              sf = r.get('same_file_leakage_files', 'N/A')
-              co = r.get('collision_leakage_files', 'N/A')
-              print(f'| {r[\"version_a\"]} vs {r[\"version_b\"]} | {r[\"training_set_size\"]} | {r[\"training_duplicate_pairs\"]} | {r[\"test_set_size\"]} | {r[\"test_entries_with_leakage\"]} | {r[\"test_leakage_percentage\"]}% | {sf} | {co} | {r[\"duplicate_pairs\"]} | {r[\"exact_duplicate_pairs\"]} |')
+              s = summary.get((r['version_a'], r['version_b']))
+              if s:
+                  sf = f'{s[\"same_file_leaked_buggy\"]}B/{s[\"same_file_leaked_clean\"]}C'
+                  co = f'{s[\"collision_leaked_buggy\"]}B/{s[\"collision_leaked_clean\"]}C'
+                  print(f'| {r[\"version_a\"]} vs {r[\"version_b\"]} | {r[\"training_set_size\"]} | {r[\"test_set_size\"]} | {s[\"test_buggy\"]} | {s[\"test_clean\"]} | {s[\"leaked_buggy\"]} ({s[\"buggy_leak_pct\"]}%) | {s[\"leaked_clean\"]} ({s[\"clean_leak_pct\"]}%) | {sf} | {co} |')
+              else:
+                  sf = r.get('same_file_leakage_files', 'N/A')
+                  co = r.get('collision_leakage_files', 'N/A')
+                  print(f'| {r[\"version_a\"]} vs {r[\"version_b\"]} | {r[\"training_set_size\"]} | {r[\"test_set_size\"]} | - | - | {r[\"test_entries_with_leakage\"]} ({r[\"test_leakage_percentage\"]}%) | - | {sf} | {co} |')
           ")
 
             cat >> $GITHUB_STEP_SUMMARY << EOF
@@ -218,36 +230,13 @@ jobs:
           ${VERSION_TABLE}
           | **Total** | **${TOTAL_FILES}** |
 
-          ## Consecutive Version Pairs
+          ## Cross-Version Leakage
 
-          | Pair | Train Files | Train Dups | Test Files | Test Leakage | Leakage % | Same File | Collision | Consec. Dups | Exact Dups |
-          |------|-------------|------------|------------|--------------|-----------|-----------|-----------|--------------|------------|
+          | Pair | Train | Test | Test Buggy | Test Clean | Leaked Buggy | Leaked Clean | Same File | Collision |
+          |------|-------|------|------------|------------|--------------|--------------|-----------|-----------|
           ${PAIRS_TABLE}
 
           EOF
-
-            # Add leakage enrichment table if summary exists
-            SUMMARY_FILE="${{ steps.repo_name.outputs.repo_name }}_leakage_summary.csv"
-            if [ -f "$SUMMARY_FILE" ]; then
-              LEAKAGE_TABLE=$(python -c "
-          import csv
-          with open('$SUMMARY_FILE') as f:
-              for r in csv.DictReader(f):
-                  sf = f'{r[\"same_file_leaked_buggy\"]}B/{r[\"same_file_leaked_clean\"]}C'
-                  co = f'{r[\"collision_leaked_buggy\"]}B/{r[\"collision_leaked_clean\"]}C'
-                  print(f'| {r[\"version_a\"]} vs {r[\"version_b\"]} | {r[\"test_total\"]} | {r[\"test_buggy\"]} | {r[\"test_clean\"]} | {r[\"leaked_buggy\"]} | {r[\"leaked_clean\"]} | {r[\"buggy_leak_pct\"]}% | {r[\"clean_leak_pct\"]}% | {sf} | {co} |')
-          ")
-
-              cat >> $GITHUB_STEP_SUMMARY << EOF
-
-          ## Leakage by Bug Label
-
-          | Pair | Test Total | Test Buggy | Test Clean | Leaked Buggy | Leaked Clean | Buggy Leak % | Clean Leak % | Same File | Collision |
-          |------|------------|------------|------------|--------------|--------------|--------------|--------------|-----------|-----------|
-          ${LEAKAGE_TABLE}
-
-          EOF
-            fi
 
             cat >> $GITHUB_STEP_SUMMARY << EOF
           ---
