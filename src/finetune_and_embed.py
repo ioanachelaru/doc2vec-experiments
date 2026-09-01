@@ -61,7 +61,7 @@ def generate_embeddings(model: Doc2Vec, documents: list) -> pd.DataFrame:
 
 
 def generate_embeddings_infer(
-    model: Doc2Vec, documents: list, epochs: int = 200, seed: int = 42
+    model: Doc2Vec, documents: list, epochs: int = 200
 ) -> pd.DataFrame:
     """Generate embeddings using infer_vector for semantic consistency.
 
@@ -69,18 +69,19 @@ def generate_embeddings_infer(
     during cumulative training), infer_vector computes each vector from the
     actual document tokens, so identical code always produces identical vectors.
 
+    Uses high epoch count (200) for stable convergence across calls.
+
     Args:
         model: Trained Doc2Vec model
         documents: List of TaggedDocument objects
         epochs: Inference epochs (higher = more stable, default 200)
-        seed: Random seed for determinism
 
     Returns:
         DataFrame with file_path column and dim_0..dim_N embedding columns
     """
     data = []
     for doc in tqdm(documents, desc="Inferring embeddings"):
-        vec = model.infer_vector(doc.words, epochs=epochs, seed=seed)
+        vec = model.infer_vector(doc.words, epochs=epochs)
         data.append([doc.tags[0]] + vec.tolist())
 
     return pd.DataFrame(

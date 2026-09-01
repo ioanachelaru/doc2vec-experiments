@@ -437,7 +437,7 @@ def run_cross_version_pipeline(
         "versions_analyzed": versions_with_docs,
         "files_per_version": files_per_version,
         "source_dir": source_dir,
-        "embedding_mode": "infer_vector (seed=42, epochs=200)",
+        "embedding_mode": "infer_vector (epochs=200)",
         "finetune_epochs": finetune_epochs,
         "threshold": threshold,
         "consecutive_pair_results": consecutive_results,

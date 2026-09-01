@@ -218,7 +218,7 @@ jobs:
           | **Repository** | ${{ github.event.inputs.repo_url }} |
           | **Tag regex** | ${{ github.event.inputs.tag_regex }} |
           | **Versions analyzed** | ${VERSIONS} |
-          | **Embedding mode** | infer_vector (seed=42, epochs=200) |
+          | **Embedding mode** | infer_vector (epochs=200) |
           | **Threshold** | ${{ github.event.inputs.duplicate_threshold }} |
           | **Total time** | ${ELAPSED} minutes |
           | **Total duplicate pairs** | ${TOTAL_DUPS} |
