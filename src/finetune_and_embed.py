@@ -60,6 +60,34 @@ def generate_embeddings(model: Doc2Vec, documents: list) -> pd.DataFrame:
     return df
 
 
+def generate_embeddings_infer(
+    model: Doc2Vec, documents: list, epochs: int = 200, seed: int = 42
+) -> pd.DataFrame:
+    """Generate embeddings using infer_vector for semantic consistency.
+
+    Unlike model.dv (which can assign identical vectors to unrelated documents
+    during cumulative training), infer_vector computes each vector from the
+    actual document tokens, so identical code always produces identical vectors.
+
+    Args:
+        model: Trained Doc2Vec model
+        documents: List of TaggedDocument objects
+        epochs: Inference epochs (higher = more stable, default 200)
+        seed: Random seed for determinism
+
+    Returns:
+        DataFrame with file_path column and dim_0..dim_N embedding columns
+    """
+    data = []
+    for doc in tqdm(documents, desc="Inferring embeddings"):
+        vec = model.infer_vector(doc.words, epochs=epochs, seed=seed)
+        data.append([doc.tags[0]] + vec.tolist())
+
+    return pd.DataFrame(
+        data, columns=["file_path"] + [f"dim_{i}" for i in range(model.vector_size)]
+    )
+
+
 def generate_embeddings_from_docvecs(model: Doc2Vec, tags: list[str]) -> pd.DataFrame:
     """Extract stored embeddings from model.dv by document tag.
 

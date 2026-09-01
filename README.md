@@ -1,148 +1,111 @@
 # Doc2Vec Code Embeddings Pipeline
 
-A GitHub Actions-powered pipeline for training Doc2Vec models on source code. Features both base model training on popular repositories and fine-tuning capabilities for specific codebases.
+A pipeline for training Doc2Vec models on source code and detecting cross-version duplicate/near-duplicate files and methods. Designed for measuring train/test leakage in Cross-Version Defect Prediction (CVDP) setups.
 
 ## Features
 
-- **Two-Stage Training**: Train a base model on popular repos, then fine-tune on your specific codebase
-- **Base Model Training**: Build robust representations from top GitHub repositories
-- **Fine-Tuning Pipeline**: Adapt pre-trained models to your specific repository
-- **Popular Repos Discovery**: Automatically fetch the most popular repositories by language
-- **Language Agnostic**: Support for any programming language (Java, Python, JavaScript, etc.)
-- **Smart Embeddings**: Generate embeddings using models trained on relevant codebases
+- **Two-Stage Training**: Train a base model on popular repos, then fine-tune cumulatively on a target codebase's version history
+- **File-Level Cross-Version Analysis**: Clone a repo, extract files per version tag, detect duplicates and train/test leakage (runs in CI)
+- **Method-Level Cross-Version Analysis**: Extract method bodies from AST data, detect duplicates and leakage at method granularity (runs locally)
+- **Bug Label Enrichment**: Join leakage pairs with SDP labels (buggy/clean) to measure how leakage affects defect prediction
+- **Duplicate Classification**: Distinguish **same_file/same_method** (same path across versions) from **collision** (different files/methods with similar embeddings)
+- **Deterministic Embeddings**: Uses `model.dv` stored vectors instead of `infer_vector` to avoid randomness
 
 ## Quick Start
 
-### Two-Stage Approach
+### GitHub Actions (File-Level)
 
-#### Step 1: Train Base Model on Popular Repositories
+#### 1. Train Base Model
+Go to **Actions** → **"Train Base Doc2Vec Model"**, configure language, repo count, and file extensions.
 
-1. Go to **Actions** → **"Train Base Doc2Vec Model"**
-2. Configure:
-   - **Language**: Select the programming language (java, python, etc.)
-   - **Repository count**: Number of top repos to use (default: 100, max: 1000)
-   - **File extensions**: Extensions to analyze (e.g., `.java`)
-   - **Vector size**: Embedding dimensions (default: 200)
-3. Run workflow and wait for completion
-4. Note the artifact name (e.g., `base-model-java`)
+#### 2. Cross-Version Analysis
+Go to **Actions** → **"Cross-Version Duplicate Analysis"** (defaults configured for Django):
+- **repo_url**: Target repository
+- **tag_regex**: Regex to match version tags (e.g., `^[0-9]+\.[0-9]+$`)
+- **base_model_run_id**: Run ID from the base model workflow
+- **source_dir**: Subdirectory to restrict file search (e.g., `django`)
+- **labels_dir**: Path to bug label CSVs for leakage enrichment
 
-#### Step 2: Fine-tune on Your Repository
-
-1. Go to **Actions** → **"Fine-tune Doc2Vec Model"**
-2. Configure:
-   - **Repository URL**: Your target repository
-   - **Repository version** (optional): Specific commit SHA, tag, or branch to analyze
-     - Leave empty for latest code
-     - Examples: `v1.0.0`, `main`, `abc123def`
-   - **Run ID**: Copy the run ID from the base model workflow URL
-     - Example: If base model URL is `.../actions/runs/1234567890`, use `1234567890`
-   - **Base model artifact**: Name from Step 1 (e.g., `base-model-java-100repos`)
-   - **File extensions**: Extensions to analyze
-   - **Fine-tune epochs**: Training iterations (default: 10)
-   - **Update vocabulary**: Whether to add new words from target repo (default: true)
-3. Run workflow to generate embeddings for your repository
-
+Job summary shows a single table with train/test counts, buggy/clean breakdown, and same_file/collision split per label.
 
 ### Local Usage
 
 ```bash
-# Clone the repo
-git clone https://github.com/yourusername/doc2vec-experiments.git
-cd doc2vec-experiments
-
-# Install dependencies
 pip install -r requirements.txt
 
-# Step 1: Get popular repositories (max 1000 due to GitHub API limits)
-python src/get_popular_repos.py \
-    --language java \
-    --count 100 \
-    --min-stars 1000 \
-    --output popular_repos.txt
+# File-level cross-version analysis
+python src/cross_version_pipeline.py \
+    --repo https://github.com/django/django.git \
+    --base-model base_model_python.d2v \
+    --tag-regex "^[0-9]+\.[0-9]+$" \
+    --ext .py \
+    --source-dir django \
+    --threshold 0.99
 
-# Step 2: Train base model on popular repos
-python src/train_base_model.py \
-    --repos popular_repos.txt \
-    --ext .java \
-    --output base_model.d2v \
-    --vector-size 200 \
-    --epochs 20
-
-# Step 3: Fine-tune on your repository
-python src/finetune_and_embed.py \
-    --repo https://github.com/your-org/your-repo.git \
-    --base-model base_model.d2v \
-    --ext .java \
-    --output your_repo \
+# Method-level analysis (requires pre-extracted AST + source code data)
+python src/method_level_pipeline.py \
+    --base-model base_model_python.d2v \
+    --data-dir "resources/django 1" \
+    --output-prefix django_method \
+    --threshold 0.99 \
     --epochs 10 \
-    --version v1.0.0  # Optional: specific version to analyze
+    --version-prefix django
 ```
-
-## Workflows Available
-
-### 1. Train Base Model (`train-base-model.yaml`)
-- Trains a Doc2Vec model on multiple popular repositories
-- Creates a robust base representation for code
-- Outputs: base model, metadata, sample embeddings
-
-### 2. Fine-tune Model (`finetune-model.yaml`)
-- Takes a pre-trained base model
-- Fine-tunes it on your specific repository
-- Generates embeddings optimized for your codebase
-- Outputs: embeddings CSV, fine-tuned model, metadata
-
-## Output Files
-
-### Base Model Training
-- **`base_model_{language}_{count}repos.d2v`**: Trained Doc2Vec model
-- **`base_model_{language}_{count}repos.json`**: Training metadata (repos used, parameters)
-- **`base_model_{language}_{count}repos.sample.csv`**: Sample embeddings for validation
-- **`popular_repos.txt`**: List of repository URLs used for training
-
-### Fine-tuning
-- **`{repo_name}_embeddings.csv`**: Document vectors for each source file
-  - Column 1: Repository-relative file path
-  - Columns 2-201: 200-dimensional embedding vectors (or as configured)
-- **`{repo_name}_finetuned.d2v`**: Fine-tuned Doc2Vec model
-- **`{repo_name}_metadata.json`**: Fine-tuning metadata including:
-  - Base model used
-  - Repository URL and version (if specified)
-  - Total documents processed
-  - Vector size and vocabulary size
-
-## Doc2Vec Configuration
-
-Default training parameters:
-- **Vector size**: 200 dimensions
-- **Window size**: 5 tokens
-- **Min count**: 3 (minimum word frequency)
-- **Training epochs**: 20
-- **Model**: DM (Distributed Memory)
-
-## Use Cases
-
-- **Code similarity**: Find similar code files across projects
-- **Code search**: Semantic search through codebases
-- **Code classification**: Classify code by functionality or quality
-- **Technical debt analysis**: Identify problematic code patterns
-- **Cross-project analysis**: Compare coding styles across repositories
 
 ## Project Structure
 
 ```
 doc2vec-experiments/
-├── .github/
-│   └── workflows/
-│       ├── train-base-model.yaml    # Train base model on popular repos
-│       └── finetune-model.yaml      # Fine-tune model on specific repo
+├── .github/workflows/
+│   ├── train-base-model.yaml         # Train base model on popular repos
+│   ├── finetune-model.yaml           # Fine-tune + embed (single version)
+│   └── cross-version-analysis.yaml   # File-level cross-version analysis
 ├── src/
-│   ├── train_base_model.py          # Train single model on multiple repos
-│   ├── finetune_and_embed.py        # Fine-tune model and generate embeddings
-│   ├── get_popular_repos.py         # Fetch popular repos from GitHub API
-│   └── utils.py                     # Shared utilities for all scripts
-├── requirements.txt                 # Python dependencies
+│   ├── train_base_model.py           # Train base model on multiple repos
+│   ├── finetune_and_embed.py         # Fine-tune and generate embeddings
+│   ├── cross_version_pipeline.py     # File-level cross-version pipeline
+│   ├── method_level_pipeline.py      # Method-level cross-version pipeline
+│   ├── analyze_duplicates.py         # Duplicate detection (cosine similarity)
+│   ├── enrich_leakage.py             # Join leakage with bug labels
+│   ├── get_popular_repos.py          # Fetch popular repos from GitHub API
+│   └── utils.py                      # Shared utilities
+├── resources/
+│   ├── django 1/                     # Django SDP data
+│   │   ├── file_level/               # Bug labels per version
+│   │   ├── ast_level/                # AST trees per version
+│   │   ├── source_code/              # Source code zips per version
+│   │   └── line_level/               # Buggy lines per version
+│   └── calcite/                      # Calcite SDP data
+│       └── file_level/               # Bug labels per version
+├── requirements.txt
 └── README.md
 ```
+
+## Output Files
+
+### Cross-Version Analysis (File-Level)
+- `*_{tag}_embeddings.csv` — Per-version file embeddings
+- `*_pair{N}_train_duplicates.csv` — Within-training duplicate pairs
+- `*_pair{N}_leakage.csv` — Train-test leakage pairs
+- `*_pair{N}_leakage_labeled.csv` — Leakage pairs enriched with buggy/clean labels
+- `*_leakage_summary.csv` — Per-pair label breakdown
+- `*_cross_version_metadata.json` — Full analysis metadata
+
+### Method-Level Analysis
+- `*_{ver}_method_embeddings.csv` — Per-version method embeddings
+- `*_pair{N}_method_leakage.csv` — Method-level leakage pairs
+- `*_pair{N}_method_leakage_labeled.csv` — Enriched with bug labels from AST data
+- `*_method_leakage_summary.csv` — Per-pair label breakdown
+- `*_method_level_metadata.json` — Full analysis metadata
+
+## Doc2Vec Configuration
+
+- **Vector size**: 200 dimensions
+- **Window size**: 5 tokens
+- **Min count**: 3 (minimum word frequency)
+- **Training epochs**: 20 (base model), 10 (fine-tuning)
+- **Algorithm**: PV-DM (Distributed Memory)
+- **Tokenizer**: Simple regex extracting identifiers, lowercased
 
 ## Requirements
 
@@ -152,23 +115,10 @@ doc2vec-experiments/
 
 ## Limitations
 
-- **GitHub API Rate Limits**:
-  - Maximum 1000 repositories per search query due to GitHub Search API limitations
-  - To train on more repos, consider lowering `min_stars` parameter or using different date ranges
-- **Processing Time**:
-  - Training on hundreds of repositories can take several hours
-  - GitHub Actions has a 6-hour timeout for workflows
-- **Memory Usage**:
-  - Large models with many repositories require significant RAM
-  - The workflow automatically sets up swap space for large training jobs
-
-## Contributing
-
-Contributions are welcome! Feel free to:
-- Add support for more languages
-- Improve tokenization strategies
-- Add visualization tools
-- Enhance the training pipeline
+- **GitHub API**: Max 1000 repos per search query
+- **GitHub Actions**: 6-hour timeout per job
+- **Memory**: Sub-batch training splits large document sets into chunks of 5000 to avoid OOM
+- **Method-level data**: AST + source code zips are too large for git/CI; run `method_level_pipeline.py` locally
 
 ## License
 
