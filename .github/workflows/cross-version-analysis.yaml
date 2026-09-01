@@ -7,13 +7,13 @@ on:
         description: 'GitHub repository URL to analyze'
         required: true
         type: string
-        default: 'https://github.com/apache/calcite.git'
+        default: 'https://github.com/django/django.git'
 
       tag_regex:
         description: 'Regex for version tags (e.g., "^[0-9]+\.[0-9]+$" for Django)'
         required: true
         type: string
-        default: 'calcite-1\.([0-9]|1[0-5])\.0(-incubating)?$'
+        default: '^[0-9]+\.[0-9]+$'
 
       max_versions:
         description: 'Maximum versions to process (0 = all)'
@@ -24,19 +24,19 @@ on:
       base_model_run_id:
         description: 'Run ID from base model workflow (find in URL: .../actions/runs/[RUN_ID])'
         required: true
-        default: '32937494910'
+        default: '32718528477'
         type: string
 
       base_model_artifact:
         description: 'Name of the base model artifact'
         required: true
-        default: 'base-model-java-100repos'
+        default: 'base-model-python-100repos'
         type: string
 
       file_extensions:
         description: 'File extensions (space-separated, e.g., ".java .scala")'
         required: true
-        default: '.java'
+        default: '.py'
         type: string
 
       finetune_epochs:
@@ -60,13 +60,13 @@ on:
       source_dir:
         description: 'Subdirectory within repo to restrict file search (e.g., "django"). Leave empty for entire repo.'
         required: false
-        default: ''
+        default: 'django'
         type: string
 
       labels_dir:
         description: 'Path to bug label CSVs (e.g., "resources/calcite/file_level"). Leave empty to skip enrichment.'
         required: false
-        default: 'resources/calcite/file_level'
+        default: 'resources/django 1/file_level'
         type: string
 
 jobs:
