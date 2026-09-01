@@ -24,7 +24,7 @@ from utils import tokenize_code
 from finetune_and_embed import (
     load_base_model,
     finetune_model,
-    generate_embeddings_from_docvecs,
+    generate_embeddings_infer,
 )
 from analyze_duplicates import (
     find_cross_version_duplicates,
@@ -472,7 +472,7 @@ def run_method_level_pipeline(
     log.info("=" * 60)
 
     model = load_base_model(base_model_path)
-    version_tags: dict[str, list[str]] = {}
+    version_docs: dict[str, list] = {}
     methods_per_version: dict[str, int] = {}
     all_metadata: dict[str, dict] = {}
     versions_with_docs = []
@@ -487,7 +487,7 @@ def run_method_level_pipeline(
             continue
 
         model = finetune_model(model, docs, epochs=epochs, update_vocab=True)
-        version_tags[v] = [doc.tags[0] for doc in docs]
+        version_docs[v] = docs
         methods_per_version[v] = len(docs)
         all_metadata.update(meta)
         versions_with_docs.append(v)
@@ -509,7 +509,7 @@ def run_method_level_pipeline(
         )
         raise SystemExit(1)
 
-    total_methods = sum(len(tags) for tags in version_tags.values())
+    total_methods = sum(len(docs) for docs in version_docs.values())
     log.info(
         "\nTotal methods: %d across %d versions",
         total_methods,
@@ -517,14 +517,14 @@ def run_method_level_pipeline(
     )
     log.info("Final vocab size: %d", len(model.wv))
 
-    # Step 3: Extract embeddings
+    # Step 3: Generate embeddings via infer_vector
     log.info("\n" + "=" * 60)
-    log.info("Step 3: Extracting embeddings from model.dv")
+    log.info("Step 3: Generating embeddings via infer_vector")
     log.info("=" * 60)
 
     version_embeddings = {}
     for v in versions_with_docs:
-        emb = generate_embeddings_from_docvecs(model, version_tags[v])
+        emb = generate_embeddings_infer(model, version_docs[v])
         version_embeddings[v] = emb
         csv_path = f"{output_prefix}_{v}_method_embeddings.csv"
         emb.to_csv(csv_path, index=False)
@@ -616,7 +616,7 @@ def run_method_level_pipeline(
         "data_dir": str(data_dir),
         "versions_analyzed": versions_with_docs,
         "methods_per_version": methods_per_version,
-        "embedding_mode": "model.dv (deterministic)",
+        "embedding_mode": "infer_vector (seed=42, epochs=200)",
         "finetune_epochs": epochs,
         "threshold": threshold,
         "consecutive_pair_results": consecutive_results,

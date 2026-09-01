@@ -25,7 +25,7 @@ from utils import (
 from finetune_and_embed import (
     load_base_model,
     finetune_model,
-    generate_embeddings_from_docvecs,
+    generate_embeddings_infer,
 )
 from analyze_duplicates import (
     find_cross_version_duplicates,
@@ -42,11 +42,11 @@ def _train_cumulatively(
     source_dir: str | None,
     finetune_epochs: int,
     update_vocab: bool,
-) -> tuple[dict[str, list[str]], dict[str, int], list[str]]:
-    """Checkout each version, train cumulatively, and store document tags.
+) -> tuple[dict[str, list], dict[str, int], list[str]]:
+    """Checkout each version, train cumulatively, and store documents.
 
-    Trains on one version at a time to limit memory usage. After training,
-    only the tag strings are kept — vectors are stored in model.dv.
+    Trains on one version at a time. Documents (tokens + tags) are kept
+    in memory for later use with infer_vector.
 
     Args:
         model: Base Doc2Vec model to fine-tune
@@ -58,10 +58,10 @@ def _train_cumulatively(
         update_vocab: Whether to update vocabulary with new words
 
     Returns:
-        Tuple of (version_tags, files_per_version, versions_with_docs)
-        where version_tags maps version -> list of document tag strings
+        Tuple of (version_docs, files_per_version, versions_with_docs)
+        where version_docs maps version -> list of TaggedDocument objects
     """
-    version_tags = {}
+    version_docs = {}
     files_per_version = {}
     search_path = repo_dir / source_dir if source_dir else repo_dir
 
@@ -78,12 +78,12 @@ def _train_cumulatively(
         model = finetune_model(
             model, docs, epochs=finetune_epochs, update_vocab=update_vocab
         )
-        version_tags[v] = [doc.tags[0] for doc in docs]
+        version_docs[v] = docs
         files_per_version[v] = len(docs)
         print(f"  {v}: {len(docs)} files, vocab={len(model.wv)}")
 
-    versions_with_docs = [v for v in versions if v in version_tags]
-    return version_tags, files_per_version, versions_with_docs
+    versions_with_docs = [v for v in versions if v in version_docs]
+    return version_docs, files_per_version, versions_with_docs
 
 
 def _analyze_consecutive_pairs(
@@ -302,9 +302,9 @@ def run_cross_version_pipeline(
     """Run the cross-version embedding and duplicate analysis pipeline.
 
     Cumulatively trains a Doc2Vec model across versions (one at a time to limit
-    memory), then extracts deterministic embeddings from model.dv (no
-    infer_vector randomness). Analyzes duplicates between consecutive version
-    pairs and computes train/test leakage.
+    memory), then generates embeddings using infer_vector (deterministic with
+    fixed seed). Analyzes duplicates between consecutive version pairs and
+    computes train/test leakage.
 
     Args:
         repo_url: GitHub repository URL
@@ -348,17 +348,15 @@ def run_cross_version_pipeline(
         print(f"  {i + 1}. {v}")
     if source_dir:
         print(f"Source directory: {source_dir}")
-    print("Embedding mode: model.dv (deterministic, cumulative training)")
+    print("Embedding mode: infer_vector (deterministic with fixed seed)")
 
     # Step 3: Cumulative training across versions
-    # Train one version at a time to limit memory. After training each version,
-    # only tag strings are kept — vectors are stored in model.dv.
     print(f"\n{'=' * 60}")
     print("Step 3: Cumulative training across versions")
     print(f"{'=' * 60}")
 
     model = load_base_model(base_model_path)
-    version_tags, files_per_version, versions_with_docs = _train_cumulatively(
+    version_docs, files_per_version, versions_with_docs = _train_cumulatively(
         model,
         repo_dir,
         versions,
@@ -378,7 +376,7 @@ def run_cross_version_pipeline(
 
     shutil.rmtree(repo_dir, ignore_errors=True)
 
-    total_docs = sum(len(tags) for tags in version_tags.values())
+    total_docs = sum(len(docs) for docs in version_docs.values())
     print(f"\nTotal documents: {total_docs} across {len(versions_with_docs)} versions")
     print(f"Final vocab size: {len(model.wv)}")
 
@@ -386,14 +384,14 @@ def run_cross_version_pipeline(
     model.save(model_path)
     print(f"Model saved to {model_path}")
 
-    # Step 4: Extract embeddings from model.dv
+    # Step 4: Generate embeddings via infer_vector
     print(f"\n{'=' * 60}")
-    print("Step 4: Extracting embeddings from model.dv")
+    print("Step 4: Generating embeddings via infer_vector")
     print(f"{'=' * 60}")
 
     version_embeddings = {}
     for v in versions_with_docs:
-        emb = generate_embeddings_from_docvecs(model, version_tags[v])
+        emb = generate_embeddings_infer(model, version_docs[v])
         version_embeddings[v] = emb
         csv_path = f"{output_prefix}_{v}_embeddings.csv"
         emb.to_csv(csv_path, index=False)
@@ -439,12 +437,12 @@ def run_cross_version_pipeline(
         "versions_analyzed": versions_with_docs,
         "files_per_version": files_per_version,
         "source_dir": source_dir,
-        "embedding_mode": "model.dv (deterministic)",
+        "embedding_mode": "infer_vector (seed=42, epochs=200)",
         "finetune_epochs": finetune_epochs,
         "threshold": threshold,
         "consecutive_pair_results": consecutive_results,
         "overall_result": overall_stats,
-        "training_approach": "train on all versions, extract from model.dv",
+        "training_approach": "train on all versions, infer_vector per document",
         "elapsed_time_minutes": round(elapsed_time / 60, 1),
     }
 
