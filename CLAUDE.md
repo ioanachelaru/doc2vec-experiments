@@ -25,8 +25,8 @@ A pipeline for training Doc2Vec models on source code and detecting cross-versio
 - Default: 200-dim vectors, window=5, min_count=3, 20 epochs
 - Simple regex tokenizer: extracts identifiers, lowercased
 - Parallel processing with multiprocessing.Pool for batch repo handling
-- Deterministic embeddings via `model.dv` (no `infer_vector` randomness)
-- Cumulative training: versions are trained one at a time in semver order, so all documents have stored vectors
+- Embeddings via `infer_vector` (200 inference epochs) — computes vectors from actual document tokens, so identical code always produces identical vectors
+- Cumulative training: versions are trained one at a time in semver order; embeddings are inferred after all training completes
 - Duplicate classification: **same_file/same_method** (same filepath/method across versions) vs **collision** (different files/methods with similar embeddings)
 
 ### Data Layout
@@ -76,7 +76,7 @@ python src/method_level_pipeline.py \
 - `.github/workflows/cross-version-analysis.yaml` - File-level cross-version duplicate analysis
   - Defaults configured for Django (repo, tag regex, base model, labels)
   - Inputs: `repo_url`, `tag_regex`, `max_versions`, `duplicate_threshold`, `source_dir`, `base_model_run_id`, `labels_dir`
-  - Trains cumulatively, extracts deterministic embeddings from `model.dv`
+  - Trains cumulatively, generates embeddings via `infer_vector` (200 epochs)
   - If `labels_dir` is provided, enriches leakage with buggy/clean labels via `enrich_leakage.py`
   - Job summary: single table showing train/test counts, buggy/clean breakdown, leaked counts with same_file/collision split per label
   - Output: `*_embeddings.csv` (per version), `*_train_duplicates.csv`, `*_leakage.csv`, `*_leakage_labeled.csv`, `*_leakage_summary.csv`
