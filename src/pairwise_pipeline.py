@@ -260,44 +260,53 @@ def _run_cumulative_fresh(
         model = finetune_model(model, combined_docs, epochs=epochs, update_vocab=True)
         print(f"  Fine-tuned on {len(combined_docs)} documents, vocab={len(model.wv)}")
 
-        # Embeddings for all current versions
-        all_embs = []
-        version_embeddings: dict[str, pd.DataFrame] = {}
-        for v in current_versions:
-            emb = generate_embeddings_infer(model, version_docs[v])
-            version_embeddings[v] = emb
-            labeled = _add_version_and_label(emb, v, label_cache)
-            all_embs.append(labeled)
+        # Embeddings: infer test version first, then stream train versions
+        # to disk to limit peak memory
+        test_emb = generate_embeddings_infer(model, version_docs[test_version])
+        test_size = len(test_emb)
+        files_per_version = {test_version: test_size}
 
-        combined = pd.concat(all_embs, ignore_index=True)
+        # Write combined CSV incrementally (test version last)
         csv_path = f"{output_prefix}_iter{iter_num}_embeddings.csv"
-        combined.to_csv(csv_path, index=False)
-        print(f"  Saved {len(combined)} embeddings -> {csv_path}")
-
-        # Leakage: each train version vs test version
-        test_emb = version_embeddings[test_version]
+        first_written = False
+        train_size = 0
         all_leakage_dups = []
+
         for tv in train_versions:
+            train_emb = generate_embeddings_infer(model, version_docs[tv])
+            files_per_version[tv] = len(train_emb)
+            train_size += len(train_emb)
+
+            # Leakage: this train version vs test
             dup_result = find_cross_version_duplicates(
-                version_embeddings[tv], test_emb, tv, test_version, threshold
+                train_emb, test_emb, tv, test_version, threshold
             )
             all_leakage_dups.extend(dup_result["duplicates"])
 
-        test_size = len(test_emb)
+            # Append labeled embeddings to CSV
+            labeled = _add_version_and_label(train_emb, tv, label_cache)
+            labeled.to_csv(csv_path, index=False, mode="a", header=not first_written)
+            first_written = True
+            del train_emb, labeled
+
+        # Append test version
+        test_labeled = _add_version_and_label(test_emb, test_version, label_cache)
+        test_labeled.to_csv(csv_path, index=False, mode="a", header=not first_written)
+        del test_labeled, test_emb
+
+        total_rows = train_size + test_size
+        print(f"  Saved {total_rows} embeddings -> {csv_path}")
+
         leak_files, leak_pct, same_n, coll_n = _leakage_stats(
             all_leakage_dups, test_size
         )
-
-        train_size = sum(len(version_embeddings[v]) for v in train_versions)
 
         result = {
             "iteration": iter_num,
             "versions": current_versions,
             "train_versions": train_versions,
             "test_version": test_version,
-            "files_per_version": {
-                v: len(version_embeddings[v]) for v in current_versions
-            },
+            "files_per_version": files_per_version,
             "total_documents": len(combined_docs),
             "vocab_size": len(model.wv),
             "train_size": train_size,
