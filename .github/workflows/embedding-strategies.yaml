@@ -139,14 +139,14 @@ jobs:
             MAX_VER_FLAG="--max-versions ${{ github.event.inputs.max_versions }}"
           fi
 
-          SOURCE_DIR_FLAG=""
-          if [ -n "${{ github.event.inputs.source_dir }}" ]; then
-            SOURCE_DIR_FLAG="--source-dir ${{ github.event.inputs.source_dir }}"
+          LABELS_ARGS=()
+          if [ -n "${{ github.event.inputs.labels_dir }}" ]; then
+            LABELS_ARGS=(--labels-dir "${{ github.event.inputs.labels_dir }}")
           fi
 
-          LABELS_FLAG=""
-          if [ -n "${{ github.event.inputs.labels_dir }}" ]; then
-            LABELS_FLAG="--labels-dir ${{ github.event.inputs.labels_dir }}"
+          SOURCE_DIR_ARGS=()
+          if [ -n "${{ github.event.inputs.source_dir }}" ]; then
+            SOURCE_DIR_ARGS=(--source-dir "${{ github.event.inputs.source_dir }}")
           fi
 
           python src/pairwise_pipeline.py \
@@ -158,7 +158,7 @@ jobs:
             --output "${{ steps.repo_name.outputs.repo_name }}_${{ github.event.inputs.strategy }}" \
             --epochs ${{ github.event.inputs.finetune_epochs }} \
             --threshold ${{ github.event.inputs.duplicate_threshold }} \
-            $MAX_VER_FLAG $SOURCE_DIR_FLAG $LABELS_FLAG
+            $MAX_VER_FLAG "${SOURCE_DIR_ARGS[@]}" "${LABELS_ARGS[@]}"
 
       - name: Write Job Summary
         if: always()
