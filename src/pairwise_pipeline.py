@@ -17,6 +17,7 @@ Output CSVs include version and label columns for downstream ML.
 """
 
 import argparse
+import ctypes
 import gc
 import json
 import shutil
@@ -38,6 +39,21 @@ from finetune_and_embed import (
     generate_embeddings_infer,
 )
 from analyze_duplicates import find_cross_version_duplicates
+
+
+def _release_memory():
+    """Force GC and return freed pages to the OS.
+
+    Python's glibc malloc keeps freed pages in its arena instead of
+    returning them via brk/mmap.  malloc_trim(0) forces that release,
+    preventing RSS growth across iterations that loads/deletes ~2 GB
+    Doc2Vec models.
+    """
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
 
 
 def _load_labels(labels_dir: Path, version: str) -> dict[str, str]:
@@ -264,7 +280,7 @@ def _run_cumulative_fresh(
         total_documents = len(combined_docs)
         print(f"  Fine-tuned on {total_documents} documents, vocab={len(model.wv)}")
         del combined_docs
-        gc.collect()
+        _release_memory()
 
         # Embeddings: infer test version first, then stream train versions
         # to disk to limit peak memory
@@ -336,7 +352,7 @@ def _run_cumulative_fresh(
         )
 
         del model
-        gc.collect()
+        _release_memory()
 
     return results
 
