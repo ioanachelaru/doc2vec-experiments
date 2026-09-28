@@ -17,6 +17,7 @@ Output CSVs include version and label columns for downstream ML.
 """
 
 import argparse
+import gc
 import json
 import shutil
 import time
@@ -164,8 +165,10 @@ def _run_pairwise(
 
         # Fine-tune on both versions
         combined_docs = version_docs[va] + version_docs[vb]
+        total_documents = len(combined_docs)
         model = finetune_model(model, combined_docs, epochs=epochs, update_vocab=True)
-        print(f"  Fine-tuned on {len(combined_docs)} documents, vocab={len(model.wv)}")
+        print(f"  Fine-tuned on {total_documents} documents, vocab={len(model.wv)}")
+        del combined_docs
 
         # Embeddings via infer_vector
         emb_a = generate_embeddings_infer(model, version_docs[va])
@@ -193,7 +196,7 @@ def _run_pairwise(
             "version_b": vb,
             "files_a": len(emb_a),
             "files_b": len(emb_b),
-            "total_documents": len(combined_docs),
+            "total_documents": total_documents,
             "vocab_size": len(model.wv),
             "duplicate_pairs": len(duplicates),
             "same_file_pairs": same_n,
@@ -258,7 +261,10 @@ def _run_cumulative_fresh(
             combined_docs.extend(version_docs[v])
 
         model = finetune_model(model, combined_docs, epochs=epochs, update_vocab=True)
-        print(f"  Fine-tuned on {len(combined_docs)} documents, vocab={len(model.wv)}")
+        total_documents = len(combined_docs)
+        print(f"  Fine-tuned on {total_documents} documents, vocab={len(model.wv)}")
+        del combined_docs
+        gc.collect()
 
         # Embeddings: infer test version first, then stream train versions
         # to disk to limit peak memory
@@ -307,7 +313,7 @@ def _run_cumulative_fresh(
             "train_versions": train_versions,
             "test_version": test_version,
             "files_per_version": files_per_version,
-            "total_documents": len(combined_docs),
+            "total_documents": total_documents,
             "vocab_size": len(model.wv),
             "train_size": train_size,
             "test_size": test_size,
@@ -330,6 +336,7 @@ def _run_cumulative_fresh(
         )
 
         del model
+        gc.collect()
 
     return results
 
