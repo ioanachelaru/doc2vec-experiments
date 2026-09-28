@@ -11,40 +11,18 @@ on:
           - pairwise
           - cumulative-fresh
 
-      repo_url:
-        description: 'GitHub repository URL to analyze'
+      project:
+        description: 'Target project preset'
         required: true
-        type: string
-        default: 'https://github.com/django/django.git'
-
-      tag_regex:
-        description: 'Regex for version tags (e.g., "^[0-9]+\.[0-9]+$" for Django)'
-        required: true
-        type: string
-        default: '^[0-9]+\.[0-9]+$'
+        type: choice
+        options:
+          - django
+          - calcite
 
       max_versions:
         description: 'Maximum versions to process (0 = all)'
         required: false
         default: '0'
-        type: string
-
-      base_model_run_id:
-        description: 'Run ID from base model workflow (find in URL: .../actions/runs/[RUN_ID])'
-        required: true
-        default: '32718528477'
-        type: string
-
-      base_model_artifact:
-        description: 'Name of the base model artifact'
-        required: true
-        default: 'base-model-python-100repos'
-        type: string
-
-      file_extensions:
-        description: 'File extensions (space-separated, e.g., ".java .scala")'
-        required: true
-        default: '.py'
         type: string
 
       finetune_epochs:
@@ -59,18 +37,6 @@ on:
         default: '0.99'
         type: string
 
-      source_dir:
-        description: 'Subdirectory within repo to restrict file search (e.g., "django"). Leave empty for entire repo.'
-        required: false
-        default: 'django'
-        type: string
-
-      labels_dir:
-        description: 'Path to bug label CSVs (e.g., "resources/django 1/file_level"). Leave empty to skip.'
-        required: false
-        default: 'resources/django 1/file_level'
-        type: string
-
 jobs:
   embedding-strategies:
     runs-on: ubuntu-latest
@@ -79,6 +45,33 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set project configuration
+        id: config
+        run: |
+          PROJECT="${{ github.event.inputs.project }}"
+
+          if [ "$PROJECT" = "django" ]; then
+            echo "repo_url=https://github.com/django/django.git" >> $GITHUB_OUTPUT
+            echo "repo_name=django" >> $GITHUB_OUTPUT
+            echo "tag_regex=^[0-9]+\.[0-9]+$" >> $GITHUB_OUTPUT
+            echo "file_extensions=.py" >> $GITHUB_OUTPUT
+            echo "source_dir=django" >> $GITHUB_OUTPUT
+            echo "labels_dir=resources/django 1/file_level" >> $GITHUB_OUTPUT
+            echo "base_model_run_id=32718528477" >> $GITHUB_OUTPUT
+            echo "base_model_artifact=base-model-python-100repos" >> $GITHUB_OUTPUT
+          elif [ "$PROJECT" = "calcite" ]; then
+            echo "repo_url=https://github.com/apache/calcite.git" >> $GITHUB_OUTPUT
+            echo "repo_name=calcite" >> $GITHUB_OUTPUT
+            echo 'tag_regex=calcite-1\.([0-9]|1[0-5])\.0(-incubating)?$' >> $GITHUB_OUTPUT
+            echo "file_extensions=.java" >> $GITHUB_OUTPUT
+            echo "source_dir=" >> $GITHUB_OUTPUT
+            echo "labels_dir=resources/calcite/file_level" >> $GITHUB_OUTPUT
+            echo "base_model_run_id=32937494910" >> $GITHUB_OUTPUT
+            echo "base_model_artifact=base-model-java-100repos" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Project: $PROJECT"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -103,22 +96,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p ./base_model
-          gh run download ${{ github.event.inputs.base_model_run_id }} \
+          gh run download ${{ steps.config.outputs.base_model_run_id }} \
             -R ${{ github.repository }} \
-            -n ${{ github.event.inputs.base_model_artifact }} \
+            -n ${{ steps.config.outputs.base_model_artifact }} \
             -D ./base_model
 
       - name: List downloaded files
         run: |
           echo "Base model files:"
           ls -la ./base_model/
-
-      - name: Extract repository name
-        id: repo_name
-        run: |
-          REPO_NAME=$(echo "${{ github.event.inputs.repo_url }}" | sed 's|.*/||; s|\.git$||')
-          echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
-          echo "Repository name: ${REPO_NAME}"
 
       - name: Setup swap space
         run: |
@@ -139,23 +125,23 @@ jobs:
             MAX_VER_FLAG="--max-versions ${{ github.event.inputs.max_versions }}"
           fi
 
-          LABELS_ARGS=()
-          if [ -n "${{ github.event.inputs.labels_dir }}" ]; then
-            LABELS_ARGS=(--labels-dir "${{ github.event.inputs.labels_dir }}")
+          SOURCE_DIR_ARGS=()
+          if [ -n "${{ steps.config.outputs.source_dir }}" ]; then
+            SOURCE_DIR_ARGS=(--source-dir "${{ steps.config.outputs.source_dir }}")
           fi
 
-          SOURCE_DIR_ARGS=()
-          if [ -n "${{ github.event.inputs.source_dir }}" ]; then
-            SOURCE_DIR_ARGS=(--source-dir "${{ github.event.inputs.source_dir }}")
+          LABELS_ARGS=()
+          if [ -n "${{ steps.config.outputs.labels_dir }}" ]; then
+            LABELS_ARGS=(--labels-dir "${{ steps.config.outputs.labels_dir }}")
           fi
 
           python src/pairwise_pipeline.py \
             --strategy "${{ github.event.inputs.strategy }}" \
-            --repo "${{ github.event.inputs.repo_url }}" \
+            --repo "${{ steps.config.outputs.repo_url }}" \
             --base-model "$BASE_MODEL" \
-            --tag-regex "${{ github.event.inputs.tag_regex }}" \
-            --ext ${{ github.event.inputs.file_extensions }} \
-            --output "${{ steps.repo_name.outputs.repo_name }}_${{ github.event.inputs.strategy }}" \
+            --tag-regex "${{ steps.config.outputs.tag_regex }}" \
+            --ext ${{ steps.config.outputs.file_extensions }} \
+            --output "${{ steps.config.outputs.repo_name }}_${{ github.event.inputs.strategy }}" \
             --epochs ${{ github.event.inputs.finetune_epochs }} \
             --threshold ${{ github.event.inputs.duplicate_threshold }} \
             $MAX_VER_FLAG "${SOURCE_DIR_ARGS[@]}" "${LABELS_ARGS[@]}"
@@ -165,7 +151,8 @@ jobs:
         run: |
           STRATEGY="${{ github.event.inputs.strategy }}"
           STRATEGY_UNDERSCORE=$(echo "$STRATEGY" | tr '-' '_')
-          PREFIX="${{ steps.repo_name.outputs.repo_name }}_${STRATEGY}"
+          REPO_NAME="${{ steps.config.outputs.repo_name }}"
+          PREFIX="${REPO_NAME}_${STRATEGY}"
           METADATA_FILE="${PREFIX}_${STRATEGY_UNDERSCORE}_metadata.json"
 
           if [ -f "$METADATA_FILE" ]; then
@@ -210,8 +197,9 @@ jobs:
           | Setting | Value |
           |---------|-------|
           | **Strategy** | ${STRATEGY} |
-          | **Repository** | ${{ github.event.inputs.repo_url }} |
-          | **Tag regex** | ${{ github.event.inputs.tag_regex }} |
+          | **Project** | ${{ github.event.inputs.project }} |
+          | **Repository** | ${{ steps.config.outputs.repo_url }} |
+          | **Tag regex** | ${{ steps.config.outputs.tag_regex }} |
           | **Versions analyzed** | ${VERSIONS} |
           | **Iterations** | ${ITERATIONS} |
           | **Embedding mode** | infer_vector (epochs=200) |
@@ -246,7 +234,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.inputs.strategy }}-${{ steps.repo_name.outputs.repo_name }}
+          name: ${{ github.event.inputs.strategy }}-${{ steps.config.outputs.repo_name }}
           path: |
-            ${{ steps.repo_name.outputs.repo_name }}_${{ github.event.inputs.strategy }}_*
+            ${{ steps.config.outputs.repo_name }}_${{ github.event.inputs.strategy }}_*
           retention-days: 90
