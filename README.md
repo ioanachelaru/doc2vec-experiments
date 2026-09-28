@@ -7,6 +7,7 @@ A pipeline for training Doc2Vec models on source code and detecting cross-versio
 - [Research Motivation](#research-motivation)
 - [How It Works](#how-it-works)
   - [Two-Stage Training](#two-stage-training)
+  - [Training Strategies](#training-strategies)
   - [Tokenization](#tokenization)
   - [Cumulative Training](#cumulative-training)
   - [Embedding Generation](#embedding-generation)
@@ -48,6 +49,18 @@ The pipeline uses a transfer learning approach:
 1. **Base model training**: A Doc2Vec model is trained on ~100 popular open-source repositories to learn general code semantics (identifier patterns, common structures). This gives the model a broad vocabulary and understanding of code before it ever sees the target project.
 
 2. **Cumulative fine-tuning**: The base model is then fine-tuned on the target project's version history. Versions are processed in chronological order, and each version's documents are used to update the model. This mirrors the CVDP setup where versions 0..i form the training set and version i+1 is the test set.
+
+### Training Strategies
+
+The pipeline supports three fine-tuning strategies, all starting from the same base model:
+
+| Strategy | How it works | Model state between iterations | Script |
+|----------|-------------|-------------------------------|--------|
+| **Cumulative-carried** | Train on v1, then continue training on v2, v3, ... The model accumulates knowledge across all versions. | Carried forward | `cross_version_pipeline.py` |
+| **Pairwise** | For each consecutive pair (vN, vN+1), load a **fresh** base model and fine-tune on both versions together. Each pair is independent. | Reset to base | `pairwise_pipeline.py --strategy pairwise` |
+| **Cumulative-fresh** | For each boundary i, load a **fresh** base model and fine-tune on all versions v0..vi together. The version window grows, but the model always starts clean. | Reset to base | `pairwise_pipeline.py --strategy cumulative-fresh` |
+
+The pairwise and cumulative-fresh strategies produce embeddings CSVs with `version` and `label` columns included, ready for downstream ML training.
 
 ### Tokenization
 
@@ -182,6 +195,7 @@ The enrichment produces:
 | `train_base_model.py` | Clones each repo, tokenizes source files, and trains a single Doc2Vec model on all documents. Saves model + metadata JSON + sample embeddings CSV. | CI workflow |
 | `finetune_and_embed.py` | Loads a base model, clones a target repo, fine-tunes, and generates embeddings. Also contains `generate_embeddings_infer()` and `generate_embeddings_from_docvecs()` used by other scripts. | CI workflow, imported by cross-version and method-level pipelines |
 | `cross_version_pipeline.py` | Orchestrates file-level cross-version analysis: clone repo, discover version tags, train cumulatively, generate embeddings via `infer_vector`, compute all pairwise duplicates, and compute leakage stats at each boundary. | CI workflow |
+| `pairwise_pipeline.py` | Fresh-base-model strategies (pairwise and cumulative-fresh). Pre-tokenizes all versions once, then runs iterations that each load a fresh base model, fine-tune, and generate embeddings with version + label columns. | CI workflow |
 | `method_level_pipeline.py` | Same as cross-version but at method granularity. Extracts method bodies from pre-existing AST CSVs and source code zips instead of cloning a repo. Includes built-in bug label enrichment. | Local only |
 | `analyze_duplicates.py` | Core duplicate detection: computes cosine similarity matrices and finds pairs above threshold. Used as both a library (imported by pipelines) and a standalone CLI. | All pipelines |
 | `enrich_leakage.py` | Joins file-level leakage pairs with SDP bug labels. Reads metadata JSON to find pairs, loads label CSVs, and produces labeled leakage CSVs + summary. | CI workflow (after cross-version pipeline) |
@@ -356,6 +370,31 @@ python src/method_level_pipeline.py \
   --version-prefix django
 ```
 
+**Pairwise / cumulative-fresh strategies (embeddings with labels):**
+```bash
+# Pairwise: fresh base model per consecutive pair
+python src/pairwise_pipeline.py \
+  --strategy pairwise \
+  --repo https://github.com/django/django.git \
+  --base-model base_model_python.d2v \
+  --tag-regex "^[0-9]+\.[0-9]+$" \
+  --ext .py \
+  --source-dir django \
+  --labels-dir "resources/django 1/file_level" \
+  --output django_pairwise
+
+# Cumulative-fresh: fresh base model, growing version window
+python src/pairwise_pipeline.py \
+  --strategy cumulative-fresh \
+  --repo https://github.com/django/django.git \
+  --base-model base_model_python.d2v \
+  --tag-regex "^[0-9]+\.[0-9]+$" \
+  --ext .py \
+  --source-dir django \
+  --labels-dir "resources/django 1/file_level" \
+  --output django_cumfresh
+```
+
 **Single-version duplicate analysis:**
 ```bash
 # Fine-tune on a single repo version and check for internal duplicates
@@ -423,6 +462,26 @@ Fine-tune a base model on a single version and run duplicate analysis within tha
 | `file_extensions` | `.py` | Space-separated extensions |
 | `duplicate_threshold` | `0.99` | Cosine similarity threshold |
 
+#### 4. Embedding Strategies (`embedding-strategies.yaml`)
+
+Pairwise and cumulative-fresh strategies with fresh base model at each iteration. Output embeddings include `version` and `label` columns.
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `strategy` | *(required)* | `pairwise` or `cumulative-fresh` |
+| `repo_url` | Django | Target repository URL |
+| `tag_regex` | `^[0-9]+\.[0-9]+$` | Regex to match version tags |
+| `max_versions` | `0` (all) | Limit number of versions |
+| `base_model_run_id` | `32718528477` | Run ID from step 1 |
+| `base_model_artifact` | `base-model-python-100repos` | Artifact name from step 1 |
+| `file_extensions` | `.py` | Space-separated extensions |
+| `finetune_epochs` | `10` | Fine-tuning epochs per iteration |
+| `duplicate_threshold` | `0.99` | Cosine similarity threshold |
+| `source_dir` | `django` | Subdirectory filter (empty = entire repo) |
+| `labels_dir` | `resources/django 1/file_level` | Bug label CSVs (empty = skip) |
+
+**Output artifact:** `{strategy}-{repo_name}` containing `*_pair{N}_embeddings.csv` (pairwise) or `*_iter{N}_embeddings.csv` (cumulative-fresh), duplicate/leakage CSVs, and metadata JSON.
+
 ## Doc2Vec Configuration
 
 | Parameter | Base model | Fine-tuning | Inference |
@@ -444,11 +503,13 @@ doc2vec-experiments/
 |   +-- train-base-model.yaml         # CI: train base model on popular repos
 |   +-- finetune-model.yaml           # CI: fine-tune + embed + duplicates (single version)
 |   +-- cross-version-analysis.yaml   # CI: file-level cross-version analysis
+|   +-- embedding-strategies.yaml     # CI: pairwise / cumulative-fresh strategies
 +-- src/
 |   +-- get_popular_repos.py          # Fetch popular repos from GitHub API
 |   +-- train_base_model.py           # Train base model on multiple repos
 |   +-- finetune_and_embed.py         # Fine-tune and generate embeddings
-|   +-- cross_version_pipeline.py     # File-level cross-version pipeline
+|   +-- cross_version_pipeline.py     # File-level cross-version pipeline (cumulative-carried)
+|   +-- pairwise_pipeline.py          # Pairwise / cumulative-fresh strategies (fresh base model)
 |   +-- method_level_pipeline.py      # Method-level cross-version pipeline (local)
 |   +-- analyze_duplicates.py         # Duplicate detection (cosine similarity)
 |   +-- enrich_leakage.py             # Join leakage with bug labels

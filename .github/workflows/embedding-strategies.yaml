@@ -1,0 +1,252 @@
+name: Embedding Strategies Analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      strategy:
+        description: 'Training strategy'
+        required: true
+        type: choice
+        options:
+          - pairwise
+          - cumulative-fresh
+
+      repo_url:
+        description: 'GitHub repository URL to analyze'
+        required: true
+        type: string
+        default: 'https://github.com/django/django.git'
+
+      tag_regex:
+        description: 'Regex for version tags (e.g., "^[0-9]+\.[0-9]+$" for Django)'
+        required: true
+        type: string
+        default: '^[0-9]+\.[0-9]+$'
+
+      max_versions:
+        description: 'Maximum versions to process (0 = all)'
+        required: false
+        default: '0'
+        type: string
+
+      base_model_run_id:
+        description: 'Run ID from base model workflow (find in URL: .../actions/runs/[RUN_ID])'
+        required: true
+        default: '32718528477'
+        type: string
+
+      base_model_artifact:
+        description: 'Name of the base model artifact'
+        required: true
+        default: 'base-model-python-100repos'
+        type: string
+
+      file_extensions:
+        description: 'File extensions (space-separated, e.g., ".java .scala")'
+        required: true
+        default: '.py'
+        type: string
+
+      finetune_epochs:
+        description: 'Number of fine-tuning epochs'
+        required: false
+        default: '10'
+        type: string
+
+      duplicate_threshold:
+        description: 'Cosine similarity threshold for duplicate detection'
+        required: false
+        default: '0.99'
+        type: string
+
+      source_dir:
+        description: 'Subdirectory within repo to restrict file search (e.g., "django"). Leave empty for entire repo.'
+        required: false
+        default: 'django'
+        type: string
+
+      labels_dir:
+        description: 'Path to bug label CSVs (e.g., "resources/django 1/file_level"). Leave empty to skip.'
+        required: false
+        default: 'resources/django 1/file_level'
+        type: string
+
+jobs:
+  embedding-strategies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours max
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download base model artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ./base_model
+          gh run download ${{ github.event.inputs.base_model_run_id }} \
+            -R ${{ github.repository }} \
+            -n ${{ github.event.inputs.base_model_artifact }} \
+            -D ./base_model
+
+      - name: List downloaded files
+        run: |
+          echo "Base model files:"
+          ls -la ./base_model/
+
+      - name: Extract repository name
+        id: repo_name
+        run: |
+          REPO_NAME=$(echo "${{ github.event.inputs.repo_url }}" | sed 's|.*/||; s|\.git$||')
+          echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
+          echo "Repository name: ${REPO_NAME}"
+
+      - name: Setup swap space
+        run: |
+          echo "Setting up additional swap space..."
+          sudo fallocate -l 8G /swapfile2
+          sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2
+          sudo swapon /swapfile2
+          sudo swapon --show
+
+      - name: Run embedding strategy pipeline
+        run: |
+          BASE_MODEL=$(find ./base_model -name "*.d2v" | head -1)
+          echo "Using base model: $BASE_MODEL"
+
+          MAX_VER_FLAG=""
+          if [ "${{ github.event.inputs.max_versions }}" != "0" ]; then
+            MAX_VER_FLAG="--max-versions ${{ github.event.inputs.max_versions }}"
+          fi
+
+          SOURCE_DIR_FLAG=""
+          if [ -n "${{ github.event.inputs.source_dir }}" ]; then
+            SOURCE_DIR_FLAG="--source-dir ${{ github.event.inputs.source_dir }}"
+          fi
+
+          LABELS_FLAG=""
+          if [ -n "${{ github.event.inputs.labels_dir }}" ]; then
+            LABELS_FLAG="--labels-dir ${{ github.event.inputs.labels_dir }}"
+          fi
+
+          python src/pairwise_pipeline.py \
+            --strategy "${{ github.event.inputs.strategy }}" \
+            --repo "${{ github.event.inputs.repo_url }}" \
+            --base-model "$BASE_MODEL" \
+            --tag-regex "${{ github.event.inputs.tag_regex }}" \
+            --ext ${{ github.event.inputs.file_extensions }} \
+            --output "${{ steps.repo_name.outputs.repo_name }}_${{ github.event.inputs.strategy }}" \
+            --epochs ${{ github.event.inputs.finetune_epochs }} \
+            --threshold ${{ github.event.inputs.duplicate_threshold }} \
+            $MAX_VER_FLAG $SOURCE_DIR_FLAG $LABELS_FLAG
+
+      - name: Write Job Summary
+        if: always()
+        run: |
+          STRATEGY="${{ github.event.inputs.strategy }}"
+          STRATEGY_UNDERSCORE=$(echo "$STRATEGY" | tr '-' '_')
+          PREFIX="${{ steps.repo_name.outputs.repo_name }}_${STRATEGY}"
+          METADATA_FILE="${PREFIX}_${STRATEGY_UNDERSCORE}_metadata.json"
+
+          if [ -f "$METADATA_FILE" ]; then
+            VERSIONS=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(len(m['versions_analyzed']))")
+            TOTAL_FILES=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(sum(m['files_per_version'].values()))")
+            ELAPSED=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(m['elapsed_time_minutes'])")
+            ITERATIONS=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(len(m['results']))")
+
+            VERSION_TABLE=$(python -c "
+          import json
+          m = json.load(open('$METADATA_FILE'))
+          for v, count in m['files_per_version'].items():
+              print(f'| {v} | {count} |')
+          ")
+
+            if [ "$STRATEGY" = "pairwise" ]; then
+              RESULTS_HEADER="| Pair | Version A | Version B | Files A | Files B | Leakage | Same File | Collision |"
+              RESULTS_SEPARATOR="|------|-----------|-----------|---------|---------|---------|-----------|-----------|"
+              RESULTS_TABLE=$(python -c "
+          import json
+          m = json.load(open('$METADATA_FILE'))
+          for r in m['results']:
+              print(f'| {r[\"pair\"]} | {r[\"version_a\"]} | {r[\"version_b\"]} | {r[\"files_a\"]} | {r[\"files_b\"]} | {r[\"test_leakage_files\"]} ({r[\"test_leakage_pct\"]}%) | {r[\"same_file_pairs\"]} | {r[\"collision_pairs\"]} |')
+          ")
+            else
+              RESULTS_HEADER="| Iter | Train | Test | Train Size | Test Size | Leakage | Same File | Collision |"
+              RESULTS_SEPARATOR="|------|-------|------|------------|-----------|---------|-----------|-----------|"
+              RESULTS_TABLE=$(python -c "
+          import json
+          m = json.load(open('$METADATA_FILE'))
+          for r in m['results']:
+              train = ', '.join(r['train_versions'])
+              print(f'| {r[\"iteration\"]} | {train} | {r[\"test_version\"]} | {r[\"train_size\"]} | {r[\"test_size\"]} | {r[\"test_leakage_files\"]} ({r[\"test_leakage_pct\"]}%) | {r[\"same_file_pairs\"]} | {r[\"collision_pairs\"]} |')
+          ")
+            fi
+
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+          # Embedding Strategies Analysis Report
+
+          ## Configuration
+
+          | Setting | Value |
+          |---------|-------|
+          | **Strategy** | ${STRATEGY} |
+          | **Repository** | ${{ github.event.inputs.repo_url }} |
+          | **Tag regex** | ${{ github.event.inputs.tag_regex }} |
+          | **Versions analyzed** | ${VERSIONS} |
+          | **Iterations** | ${ITERATIONS} |
+          | **Embedding mode** | infer_vector (epochs=200) |
+          | **Threshold** | ${{ github.event.inputs.duplicate_threshold }} |
+          | **Total time** | ${ELAPSED} minutes |
+
+          ## Files per Version
+
+          | Version | Files |
+          |---------|-------|
+          ${VERSION_TABLE}
+          | **Total** | **${TOTAL_FILES}** |
+
+          ## Results
+
+          ${RESULTS_HEADER}
+          ${RESULTS_SEPARATOR}
+          ${RESULTS_TABLE}
+
+          EOF
+
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+          ---
+          *Generated by [doc2vec-experiments](https://github.com/${{ github.repository }})*
+          EOF
+          else
+            echo "## Embedding Strategies Analysis" >> $GITHUB_STEP_SUMMARY
+            echo "Analysis did not complete successfully. Check logs for details." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.strategy }}-${{ steps.repo_name.outputs.repo_name }}
+          path: |
+            ${{ steps.repo_name.outputs.repo_name }}_${{ github.event.inputs.strategy }}_*
+          retention-days: 90

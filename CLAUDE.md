@@ -17,6 +17,7 @@ A pipeline for training Doc2Vec models on source code and detecting cross-versio
 - `method_level_pipeline.py` - **Method-level** cross-version analysis: extract method bodies from pre-existing AST-level CSVs and source code zips, train cumulatively, detect duplicates + leakage, enrich with bug labels. Runs locally (data too large for CI).
 - `get_popular_repos.py` - Fetch popular repos from GitHub API (supports `--org` for organization filtering)
 - `analyze_duplicates.py` - Find duplicate/near-duplicate embeddings (single-version and cross-version). Cosine similarity is clamped to [-1, 1] to prevent floating-point overflow false positives.
+- `pairwise_pipeline.py` - **Fresh-base-model strategies**: pairwise (fine-tune on each consecutive pair independently) and cumulative-fresh (growing version window, reset to base each time). Outputs embeddings with version + label columns for downstream ML. Runs in CI.
 - `enrich_leakage.py` - Join file-level cross-version leakage pairs with bug labels (buggy/clean) from SDP datasets
 - `utils.py` - Shared utilities (clone_repo, tokenize_code, prepare_documents, get_version_tags)
 
@@ -27,6 +28,7 @@ A pipeline for training Doc2Vec models on source code and detecting cross-versio
 - Parallel processing with multiprocessing.Pool for batch repo handling
 - Embeddings via `infer_vector` (200 inference epochs) — computes vectors from actual document tokens, so identical code always produces identical vectors
 - Cumulative training: versions are trained one at a time in semver order; embeddings are inferred after all training completes
+- Fresh-base strategies: pairwise (fresh model per pair) and cumulative-fresh (fresh model, growing window) — both reset to base model each iteration, unlike cumulative-carried
 - Duplicate classification: **same_file/same_method** (same filepath/method across versions) vs **collision** (different files/methods with similar embeddings)
 
 ### Data Layout
@@ -80,6 +82,11 @@ python src/method_level_pipeline.py \
   - If `labels_dir` is provided, enriches leakage with buggy/clean labels via `enrich_leakage.py`
   - Job summary: single table showing train/test counts, buggy/clean breakdown, leaked counts with same_file/collision split per label
   - Output: `*_embeddings.csv` (per version), `*_train_duplicates.csv`, `*_leakage.csv`, `*_leakage_labeled.csv`, `*_leakage_summary.csv`
+- `.github/workflows/embedding-strategies.yaml` - Pairwise and cumulative-fresh embedding strategies
+  - Inputs: `strategy` (pairwise or cumulative-fresh), `repo_url`, `tag_regex`, `max_versions`, `labels_dir`, etc.
+  - Each iteration loads a fresh base model (not carried forward)
+  - Output embeddings include `version` and `label` columns for downstream ML
+  - Output: `*_pair{N}_embeddings.csv` or `*_iter{N}_embeddings.csv`, `*_duplicates.csv`, metadata JSON
 
 ### Constraints
 - GitHub API: max 1000 repos per search query
@@ -147,6 +154,33 @@ python src/method_level_pipeline.py \
 Method tag format: `{version}/{filepath}::{ClassName.method_name}` (with `#N` disambiguation for collisions). Methods with <= 5 tokens are skipped.
 
 Output: `*_{ver}_method_embeddings.csv`, `*_pair{N}_method_leakage.csv`, `*_pair{N}_method_leakage_labeled.csv`, `*_method_leakage_summary.csv`, `*_method_level_metadata.json`
+
+### Pairwise / Cumulative-Fresh Strategies
+```bash
+# Pairwise: fresh base model per consecutive pair, embeddings with labels
+python src/pairwise_pipeline.py \
+  --strategy pairwise \
+  --repo https://github.com/django/django.git \
+  --base-model base_model_python.d2v \
+  --tag-regex "^[0-9]+\.[0-9]+$" \
+  --ext .py \
+  --source-dir django \
+  --labels-dir "resources/django 1/file_level" \
+  --output django_pairwise
+
+# Cumulative-fresh: fresh base model, growing version window
+python src/pairwise_pipeline.py \
+  --strategy cumulative-fresh \
+  --repo https://github.com/django/django.git \
+  --base-model base_model_python.d2v \
+  --tag-regex "^[0-9]+\.[0-9]+$" \
+  --ext .py \
+  --source-dir django \
+  --labels-dir "resources/django 1/file_level" \
+  --output django_cumfresh
+```
+
+Output: `*_pair{N}_embeddings.csv` or `*_iter{N}_embeddings.csv` (with version + label columns), `*_pair{N}_duplicates.csv` or `*_iter{N}_leakage.csv`, `*_{strategy}_metadata.json`
 
 ### Enriching Leakage with Bug Labels
 ```bash
