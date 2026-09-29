@@ -373,16 +373,19 @@ def _run_cumulative_fresh(
         # Fresh base model
         model = load_base_model(base_model_path)
 
-        # Load all documents into memory for training (~50MB for 12k docs,
-        # trivial vs the 2GB model). Using a plain list avoids SEGV that
-        # occurs when gensim's Cython training code iterates DiskBackedCorpus.
-        all_docs = []
+        # Train one version at a time to avoid gensim SEGV that occurs
+        # when model.train() is called with 8k+ documents after
+        # build_vocab(update=True). Per-version training (~700 docs each)
+        # matches the proven cross_version_pipeline.py pattern.
+        total_documents = 0
         for v in current_versions:
-            all_docs.extend(_load_version_docs(version_meta[v]))
-        total_documents = len(all_docs)
-        model = finetune_model(model, all_docs, epochs=epochs, update_vocab=True)
-        print(f"  Fine-tuned on {total_documents} documents, vocab={len(model.wv)}")
-        del all_docs
+            docs = _load_version_docs(version_meta[v])
+            model = finetune_model(model, docs, epochs=epochs, update_vocab=True)
+            total_documents += len(docs)
+            del docs
+        print(
+            f"  Fine-tuned on {total_documents} documents ({len(current_versions)} versions), vocab={len(model.wv)}"
+        )
 
         # Embeddings: infer test version first, then stream train versions
         # to disk to limit peak memory
