@@ -28,7 +28,7 @@ A pipeline for training Doc2Vec models on source code and detecting cross-versio
 - Parallel processing with multiprocessing.Pool for batch repo handling
 - Embeddings via `infer_vector` (200 inference epochs) — computes vectors from actual document tokens, so identical code always produces identical vectors
 - Cumulative training: versions are trained one at a time in semver order; embeddings are inferred after all training completes
-- Fresh-base strategies: pairwise (fresh model per pair) and cumulative-fresh (fresh model, growing window) — both reset to base model each iteration, unlike cumulative-carried
+- Fresh-base strategies: pairwise (fresh model per pair) and cumulative-fresh (fresh model, growing window) — both reset to base model each iteration, unlike cumulative-carried. Cumulative-fresh supports `--start-iter`/`--end-iter` for parallel CI execution (5 chunk jobs)
 - Duplicate classification: **same_file/same_method** (same filepath/method across versions) vs **collision** (different files/methods with similar embeddings)
 
 ### Data Layout
@@ -83,8 +83,10 @@ python src/method_level_pipeline.py \
   - Job summary: single table showing train/test counts, buggy/clean breakdown, leaked counts with same_file/collision split per label
   - Output: `*_embeddings.csv` (per version), `*_train_duplicates.csv`, `*_leakage.csv`, `*_leakage_labeled.csv`, `*_leakage_summary.csv`
 - `.github/workflows/embedding-strategies.yaml` - Pairwise and cumulative-fresh embedding strategies
-  - Inputs: `strategy` (pairwise or cumulative-fresh), `repo_url`, `tag_regex`, `max_versions`, `labels_dir`, etc.
+  - Inputs: `strategy` (pairwise or cumulative-fresh), `project` (django or calcite), `max_versions`, etc.
   - Each iteration loads a fresh base model (not carried forward)
+  - **Pairwise**: single job (~2.5 h)
+  - **Cumulative-fresh**: 5 parallel chunk jobs (iterations 1-5, 6-10, 11-15, 16-20, 21-30) + merge job for combined summary. Chunks beyond the iteration count exit early with no results.
   - Output embeddings include `version` and `label` columns for downstream ML
   - Output: `*_pair{N}_embeddings.csv` or `*_iter{N}_embeddings.csv`, `*_duplicates.csv`, metadata JSON
 
@@ -178,9 +180,21 @@ python src/pairwise_pipeline.py \
   --source-dir django \
   --labels-dir "resources/django 1/file_level" \
   --output django_cumfresh
+
+# Parallel chunks (used by CI — run iterations 1-5 only)
+python src/pairwise_pipeline.py \
+  --strategy cumulative-fresh \
+  --repo https://github.com/django/django.git \
+  --base-model base_model_python.d2v \
+  --tag-regex "^[0-9]+\.[0-9]+$" \
+  --ext .py \
+  --source-dir django \
+  --labels-dir "resources/django 1/file_level" \
+  --output django_cumfresh \
+  --start-iter 1 --end-iter 5
 ```
 
-Output: `*_pair{N}_embeddings.csv` or `*_iter{N}_embeddings.csv` (with version + label columns), `*_pair{N}_duplicates.csv` or `*_iter{N}_leakage.csv`, `*_{strategy}_metadata.json`
+Output: `*_pair{N}_embeddings.csv` or `*_iter{N}_embeddings.csv` (with version + label columns), `*_pair{N}_duplicates.csv` or `*_iter{N}_leakage.csv`, `*_{strategy}_metadata.json` (or `*_metadata_chunk{start}_{end}.json` when using `--start-iter`/`--end-iter`)
 
 ### Enriching Leakage with Bug Labels
 ```bash

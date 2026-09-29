@@ -37,10 +37,18 @@ on:
         default: '0.99'
         type: string
 
+# ──────────────────────────────────────────────────────────────
+# Pairwise: single job (memory-safe, ~2.5 h)
+# Cumulative-fresh: 5 parallel chunk jobs + merge
+# ──────────────────────────────────────────────────────────────
+
 jobs:
-  embedding-strategies:
+
+  # ── Pairwise (single job, unchanged) ────────────────────────
+  pairwise:
+    if: github.event.inputs.strategy == 'pairwise'
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 6 hours max
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repository
@@ -71,7 +79,200 @@ jobs:
             echo "base_model_artifact=base-model-java-100repos" >> $GITHUB_OUTPUT
           fi
 
-          echo "Project: $PROJECT"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download base model artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ./base_model
+          gh run download ${{ steps.config.outputs.base_model_run_id }} \
+            -R ${{ github.repository }} \
+            -n ${{ steps.config.outputs.base_model_artifact }} \
+            -D ./base_model
+
+      - name: Setup swap space
+        run: |
+          echo "Setting up additional swap space..."
+          sudo fallocate -l 8G /swapfile2
+          sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2
+          sudo swapon /swapfile2
+          sudo swapon --show
+
+      - name: Run pairwise pipeline
+        run: |
+          BASE_MODEL=$(find ./base_model -name "*.d2v" | head -1)
+          echo "Using base model: $BASE_MODEL"
+
+          MAX_VER_FLAG=""
+          if [ "${{ github.event.inputs.max_versions }}" != "0" ]; then
+            MAX_VER_FLAG="--max-versions ${{ github.event.inputs.max_versions }}"
+          fi
+
+          SOURCE_DIR_ARGS=()
+          if [ -n "${{ steps.config.outputs.source_dir }}" ]; then
+            SOURCE_DIR_ARGS=(--source-dir "${{ steps.config.outputs.source_dir }}")
+          fi
+
+          LABELS_ARGS=()
+          if [ -n "${{ steps.config.outputs.labels_dir }}" ]; then
+            LABELS_ARGS=(--labels-dir "${{ steps.config.outputs.labels_dir }}")
+          fi
+
+          python src/pairwise_pipeline.py \
+            --strategy pairwise \
+            --repo "${{ steps.config.outputs.repo_url }}" \
+            --base-model "$BASE_MODEL" \
+            --tag-regex "${{ steps.config.outputs.tag_regex }}" \
+            --ext ${{ steps.config.outputs.file_extensions }} \
+            --output "${{ steps.config.outputs.repo_name }}_pairwise" \
+            --epochs ${{ github.event.inputs.finetune_epochs }} \
+            --threshold ${{ github.event.inputs.duplicate_threshold }} \
+            $MAX_VER_FLAG "${SOURCE_DIR_ARGS[@]}" "${LABELS_ARGS[@]}"
+
+      - name: Write Job Summary
+        if: always()
+        run: |
+          REPO_NAME="${{ steps.config.outputs.repo_name }}"
+          METADATA_FILE="${REPO_NAME}_pairwise_pairwise_metadata.json"
+
+          if [ -f "$METADATA_FILE" ]; then
+            VERSIONS=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(len(m['versions_analyzed']))")
+            TOTAL_FILES=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(sum(m['files_per_version'].values()))")
+            ELAPSED=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(m['elapsed_time_minutes'])")
+            ITERATIONS=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(len(m['results']))")
+
+            VERSION_TABLE=$(python -c "
+          import json
+          m = json.load(open('$METADATA_FILE'))
+          for v, count in m['files_per_version'].items():
+              print(f'| {v} | {count} |')
+          ")
+
+            RESULTS_TABLE=$(python -c "
+          import json
+          m = json.load(open('$METADATA_FILE'))
+          for r in m['results']:
+              print(f'| {r[\"pair\"]} | {r[\"version_a\"]} | {r[\"version_b\"]} | {r[\"files_a\"]} | {r[\"files_b\"]} | {r[\"test_leakage_files\"]} ({r[\"test_leakage_pct\"]}%) | {r[\"same_file_pairs\"]} | {r[\"collision_pairs\"]} |')
+          ")
+
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+          # Embedding Strategies Analysis Report
+
+          ## Configuration
+
+          | Setting | Value |
+          |---------|-------|
+          | **Strategy** | pairwise |
+          | **Project** | ${{ github.event.inputs.project }} |
+          | **Repository** | ${{ steps.config.outputs.repo_url }} |
+          | **Tag regex** | ${{ steps.config.outputs.tag_regex }} |
+          | **Versions analyzed** | ${VERSIONS} |
+          | **Iterations** | ${ITERATIONS} |
+          | **Embedding mode** | infer_vector (epochs=200) |
+          | **Threshold** | ${{ github.event.inputs.duplicate_threshold }} |
+          | **Total time** | ${ELAPSED} minutes |
+
+          ## Files per Version
+
+          | Version | Files |
+          |---------|-------|
+          ${VERSION_TABLE}
+          | **Total** | **${TOTAL_FILES}** |
+
+          ## Results
+
+          | Pair | Version A | Version B | Files A | Files B | Leakage | Same File | Collision |
+          |------|-----------|-----------|---------|---------|---------|-----------|-----------|
+          ${RESULTS_TABLE}
+
+          ---
+          *Generated by [doc2vec-experiments](https://github.com/${{ github.repository }})*
+          EOF
+          else
+            echo "## Embedding Strategies Analysis" >> $GITHUB_STEP_SUMMARY
+            echo "Analysis did not complete successfully. Check logs for details." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pairwise-${{ steps.config.outputs.repo_name }}
+          path: |
+            ${{ steps.config.outputs.repo_name }}_pairwise_*
+          retention-days: 90
+
+  # ── Cumulative-fresh: parallel chunks ───────────────────────
+  cumulative-fresh:
+    if: github.event.inputs.strategy == 'cumulative-fresh'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - chunk: 1
+            start_iter: 1
+            end_iter: 5
+          - chunk: 2
+            start_iter: 6
+            end_iter: 10
+          - chunk: 3
+            start_iter: 11
+            end_iter: 15
+          - chunk: 4
+            start_iter: 16
+            end_iter: 20
+          - chunk: 5
+            start_iter: 21
+            end_iter: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set project configuration
+        id: config
+        run: |
+          PROJECT="${{ github.event.inputs.project }}"
+
+          if [ "$PROJECT" = "django" ]; then
+            echo "repo_url=https://github.com/django/django.git" >> $GITHUB_OUTPUT
+            echo "repo_name=django" >> $GITHUB_OUTPUT
+            echo "tag_regex=^[0-9]+\.[0-9]+$" >> $GITHUB_OUTPUT
+            echo "file_extensions=.py" >> $GITHUB_OUTPUT
+            echo "source_dir=django" >> $GITHUB_OUTPUT
+            echo "labels_dir=resources/django 1/file_level" >> $GITHUB_OUTPUT
+            echo "base_model_run_id=32718528477" >> $GITHUB_OUTPUT
+            echo "base_model_artifact=base-model-python-100repos" >> $GITHUB_OUTPUT
+          elif [ "$PROJECT" = "calcite" ]; then
+            echo "repo_url=https://github.com/apache/calcite.git" >> $GITHUB_OUTPUT
+            echo "repo_name=calcite" >> $GITHUB_OUTPUT
+            echo 'tag_regex=calcite-1\.([0-9]|1[0-5])\.0(-incubating)?$' >> $GITHUB_OUTPUT
+            echo "file_extensions=.java" >> $GITHUB_OUTPUT
+            echo "source_dir=" >> $GITHUB_OUTPUT
+            echo "labels_dir=resources/calcite/file_level" >> $GITHUB_OUTPUT
+            echo "base_model_run_id=32937494910" >> $GITHUB_OUTPUT
+            echo "base_model_artifact=base-model-java-100repos" >> $GITHUB_OUTPUT
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -101,24 +302,20 @@ jobs:
             -n ${{ steps.config.outputs.base_model_artifact }} \
             -D ./base_model
 
-      - name: List downloaded files
-        run: |
-          echo "Base model files:"
-          ls -la ./base_model/
-
       - name: Setup swap space
         run: |
           echo "Setting up additional swap space..."
-          sudo fallocate -l 16G /swapfile2
+          sudo fallocate -l 8G /swapfile2
           sudo chmod 600 /swapfile2
           sudo mkswap /swapfile2
           sudo swapon /swapfile2
           sudo swapon --show
 
-      - name: Run embedding strategy pipeline
+      - name: Run cumulative-fresh chunk
         run: |
           BASE_MODEL=$(find ./base_model -name "*.d2v" | head -1)
           echo "Using base model: $BASE_MODEL"
+          echo "Chunk ${{ matrix.chunk }}: iterations ${{ matrix.start_iter }}-${{ matrix.end_iter }}"
 
           MAX_VER_FLAG=""
           if [ "${{ github.event.inputs.max_versions }}" != "0" ]; then
@@ -136,24 +333,109 @@ jobs:
           fi
 
           python src/pairwise_pipeline.py \
-            --strategy "${{ github.event.inputs.strategy }}" \
+            --strategy cumulative-fresh \
             --repo "${{ steps.config.outputs.repo_url }}" \
             --base-model "$BASE_MODEL" \
             --tag-regex "${{ steps.config.outputs.tag_regex }}" \
             --ext ${{ steps.config.outputs.file_extensions }} \
-            --output "${{ steps.config.outputs.repo_name }}_${{ github.event.inputs.strategy }}" \
+            --output "${{ steps.config.outputs.repo_name }}_cumulative-fresh" \
             --epochs ${{ github.event.inputs.finetune_epochs }} \
             --threshold ${{ github.event.inputs.duplicate_threshold }} \
+            --start-iter ${{ matrix.start_iter }} \
+            --end-iter ${{ matrix.end_iter }} \
             $MAX_VER_FLAG "${SOURCE_DIR_ARGS[@]}" "${LABELS_ARGS[@]}"
 
-      - name: Write Job Summary
+      - name: Upload chunk results
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cumulative-fresh-${{ steps.config.outputs.repo_name }}-chunk${{ matrix.chunk }}
+          path: |
+            ${{ steps.config.outputs.repo_name }}_cumulative-fresh_*
+          retention-days: 90
+
+  # ── Cumulative-fresh: merge chunks & write summary ──────────
+  merge-cumulative-fresh:
+    needs: cumulative-fresh
+    if: github.event.inputs.strategy == 'cumulative-fresh'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Set project configuration
+        id: config
         run: |
-          STRATEGY="${{ github.event.inputs.strategy }}"
-          STRATEGY_UNDERSCORE=$(echo "$STRATEGY" | tr '-' '_')
+          PROJECT="${{ github.event.inputs.project }}"
+          if [ "$PROJECT" = "django" ]; then
+            echo "repo_name=django" >> $GITHUB_OUTPUT
+            echo "repo_url=https://github.com/django/django.git" >> $GITHUB_OUTPUT
+            echo "tag_regex=^[0-9]+\.[0-9]+$" >> $GITHUB_OUTPUT
+          elif [ "$PROJECT" = "calcite" ]; then
+            echo "repo_name=calcite" >> $GITHUB_OUTPUT
+            echo "repo_url=https://github.com/apache/calcite.git" >> $GITHUB_OUTPUT
+            echo 'tag_regex=calcite-1\.([0-9]|1[0-5])\.0(-incubating)?$' >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download all chunk artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cumulative-fresh-${{ steps.config.outputs.repo_name }}-chunk*
+          merge-multiple: true
+          path: ./results
+
+      - name: List downloaded files
+        run: ls -la ./results/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Merge metadata and write summary
+        run: |
           REPO_NAME="${{ steps.config.outputs.repo_name }}"
-          PREFIX="${REPO_NAME}_${STRATEGY}"
-          METADATA_FILE="${PREFIX}_${STRATEGY_UNDERSCORE}_metadata.json"
+
+          python3 << 'PYEOF'
+          import json, glob, sys
+
+          repo_name = "${{ steps.config.outputs.repo_name }}"
+          chunks = sorted(glob.glob(f"./results/{repo_name}_cumulative-fresh_cumulative_fresh_metadata_chunk*.json"))
+
+          if not chunks:
+              print("No chunk metadata files found")
+              sys.exit(0)
+
+          # Load first chunk as base (has config fields)
+          with open(chunks[0]) as f:
+              merged = json.load(f)
+
+          # Combine results from all chunks
+          all_results = list(merged["results"])
+          total_time = merged.get("elapsed_time_minutes", 0)
+
+          for path in chunks[1:]:
+              with open(path) as f:
+                  chunk = json.load(f)
+              all_results.extend(chunk["results"])
+              total_time = max(total_time, chunk.get("elapsed_time_minutes", 0))
+
+          # Sort by iteration number
+          all_results.sort(key=lambda r: r["iteration"])
+          merged["results"] = all_results
+          merged["elapsed_time_minutes"] = total_time
+
+          # Write merged metadata
+          out_path = f"./results/{repo_name}_cumulative-fresh_cumulative_fresh_metadata.json"
+          with open(out_path, "w") as f:
+              json.dump(merged, f, indent=2)
+
+          print(f"Merged {len(chunks)} chunks -> {len(all_results)} iterations")
+          PYEOF
+
+      - name: Write Job Summary
+        run: |
+          REPO_NAME="${{ steps.config.outputs.repo_name }}"
+          METADATA_FILE="./results/${REPO_NAME}_cumulative-fresh_cumulative_fresh_metadata.json"
 
           if [ -f "$METADATA_FILE" ]; then
             VERSIONS=$(python -c "import json; m=json.load(open('$METADATA_FILE')); print(len(m['versions_analyzed']))")
@@ -168,26 +450,13 @@ jobs:
               print(f'| {v} | {count} |')
           ")
 
-            if [ "$STRATEGY" = "pairwise" ]; then
-              RESULTS_HEADER="| Pair | Version A | Version B | Files A | Files B | Leakage | Same File | Collision |"
-              RESULTS_SEPARATOR="|------|-----------|-----------|---------|---------|---------|-----------|-----------|"
-              RESULTS_TABLE=$(python -c "
-          import json
-          m = json.load(open('$METADATA_FILE'))
-          for r in m['results']:
-              print(f'| {r[\"pair\"]} | {r[\"version_a\"]} | {r[\"version_b\"]} | {r[\"files_a\"]} | {r[\"files_b\"]} | {r[\"test_leakage_files\"]} ({r[\"test_leakage_pct\"]}%) | {r[\"same_file_pairs\"]} | {r[\"collision_pairs\"]} |')
-          ")
-            else
-              RESULTS_HEADER="| Iter | Train | Test | Train Size | Test Size | Leakage | Same File | Collision |"
-              RESULTS_SEPARATOR="|------|-------|------|------------|-----------|---------|-----------|-----------|"
-              RESULTS_TABLE=$(python -c "
+            RESULTS_TABLE=$(python -c "
           import json
           m = json.load(open('$METADATA_FILE'))
           for r in m['results']:
               train = ', '.join(r['train_versions'])
               print(f'| {r[\"iteration\"]} | {train} | {r[\"test_version\"]} | {r[\"train_size\"]} | {r[\"test_size\"]} | {r[\"test_leakage_files\"]} ({r[\"test_leakage_pct\"]}%) | {r[\"same_file_pairs\"]} | {r[\"collision_pairs\"]} |')
           ")
-            fi
 
             cat >> $GITHUB_STEP_SUMMARY << EOF
           # Embedding Strategies Analysis Report
@@ -196,7 +465,7 @@ jobs:
 
           | Setting | Value |
           |---------|-------|
-          | **Strategy** | ${STRATEGY} |
+          | **Strategy** | cumulative-fresh |
           | **Project** | ${{ github.event.inputs.project }} |
           | **Repository** | ${{ steps.config.outputs.repo_url }} |
           | **Tag regex** | ${{ steps.config.outputs.tag_regex }} |
@@ -204,7 +473,7 @@ jobs:
           | **Iterations** | ${ITERATIONS} |
           | **Embedding mode** | infer_vector (epochs=200) |
           | **Threshold** | ${{ github.event.inputs.duplicate_threshold }} |
-          | **Total time** | ${ELAPSED} minutes |
+          | **Total time** | ${ELAPSED} minutes (parallel) |
 
           ## Files per Version
 
@@ -215,13 +484,10 @@ jobs:
 
           ## Results
 
-          ${RESULTS_HEADER}
-          ${RESULTS_SEPARATOR}
+          | Iter | Train | Test | Train Size | Test Size | Leakage | Same File | Collision |
+          |------|-------|------|------------|-----------|---------|-----------|-----------|
           ${RESULTS_TABLE}
 
-          EOF
-
-            cat >> $GITHUB_STEP_SUMMARY << EOF
           ---
           *Generated by [doc2vec-experiments](https://github.com/${{ github.repository }})*
           EOF
@@ -230,11 +496,9 @@ jobs:
             echo "Analysis did not complete successfully. Check logs for details." >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Upload results
-        if: always()
+      - name: Upload merged results
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.inputs.strategy }}-${{ steps.config.outputs.repo_name }}
-          path: |
-            ${{ steps.config.outputs.repo_name }}_${{ github.event.inputs.strategy }}_*
+          name: cumulative-fresh-${{ steps.config.outputs.repo_name }}
+          path: ./results/
           retention-days: 90

@@ -17,8 +17,6 @@ Output CSVs include version and label columns for downstream ML.
 """
 
 import argparse
-import ctypes
-import gc
 import json
 import shutil
 import time
@@ -39,21 +37,6 @@ from finetune_and_embed import (
     generate_embeddings_infer,
 )
 from analyze_duplicates import find_cross_version_duplicates
-
-
-def _release_memory():
-    """Force GC and return freed pages to the OS.
-
-    Python's glibc malloc keeps freed pages in its arena instead of
-    returning them via brk/mmap.  malloc_trim(0) forces that release,
-    preventing RSS growth across iterations that loads/deletes ~2 GB
-    Doc2Vec models.
-    """
-    gc.collect()
-    try:
-        ctypes.CDLL("libc.so.6").malloc_trim(0)
-    except (OSError, AttributeError):
-        pass
 
 
 def _load_labels(labels_dir: Path, version: str) -> dict[str, str]:
@@ -245,6 +228,8 @@ def _run_cumulative_fresh(
     epochs: int,
     threshold: float,
     output_prefix: str,
+    start_iter: int | None = None,
+    end_iter: int | None = None,
 ) -> list[dict]:
     """Run cumulative-fresh strategy: fresh base model, growing version window.
 
@@ -254,10 +239,19 @@ def _run_cumulative_fresh(
       3. Generate embeddings for all versions via infer_vector
       4. Merge bug labels into the embeddings CSV
       5. Run leakage analysis (v0..vi-1 = train, vi = test)
+
+    Args:
+        start_iter: If set, skip iterations before this (1-based, inclusive)
+        end_iter: If set, stop after this iteration (1-based, inclusive)
     """
     results = []
 
     for i in range(1, len(versions)):
+        if start_iter is not None and i < start_iter:
+            continue
+        if end_iter is not None and i > end_iter:
+            break
+
         current_versions = versions[: i + 1]
         iter_num = i
         train_versions = current_versions[:-1]
@@ -280,7 +274,6 @@ def _run_cumulative_fresh(
         total_documents = len(combined_docs)
         print(f"  Fine-tuned on {total_documents} documents, vocab={len(model.wv)}")
         del combined_docs
-        _release_memory()
 
         # Embeddings: infer test version first, then stream train versions
         # to disk to limit peak memory
@@ -352,7 +345,6 @@ def _run_cumulative_fresh(
         )
 
         del model
-        _release_memory()
 
     return results
 
@@ -369,6 +361,8 @@ def run_pipeline(
     threshold: float = 0.99,
     max_versions: int | None = None,
     source_dir: str | None = None,
+    start_iter: int | None = None,
+    end_iter: int | None = None,
 ) -> dict:
     """Run the embedding strategy pipeline.
 
@@ -384,6 +378,8 @@ def run_pipeline(
         threshold: Cosine similarity threshold
         max_versions: Optional limit on versions
         source_dir: Optional subdirectory filter
+        start_iter: Start iteration for cumulative-fresh (1-based, inclusive)
+        end_iter: End iteration for cumulative-fresh (1-based, inclusive)
 
     Returns:
         Metadata dict with configuration and results
@@ -475,6 +471,8 @@ def run_pipeline(
             finetune_epochs,
             threshold,
             output_prefix,
+            start_iter=start_iter,
+            end_iter=end_iter,
         )
 
     # Step 6: Save metadata
@@ -494,7 +492,13 @@ def run_pipeline(
         "elapsed_time_minutes": round(elapsed_time / 60, 1),
     }
 
-    metadata_path = f"{output_prefix}_{strategy.replace('-', '_')}_metadata.json"
+    strategy_slug = strategy.replace("-", "_")
+    if start_iter is not None or end_iter is not None:
+        s = start_iter or 1
+        e = end_iter or "end"
+        metadata_path = f"{output_prefix}_{strategy_slug}_metadata_chunk{s}_{e}.json"
+    else:
+        metadata_path = f"{output_prefix}_{strategy_slug}_metadata.json"
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
 
@@ -554,6 +558,16 @@ if __name__ == "__main__":
         "--source-dir",
         help="Subdirectory within repo to restrict file search (e.g., 'django')",
     )
+    parser.add_argument(
+        "--start-iter",
+        type=int,
+        help="Start iteration for cumulative-fresh (1-based, inclusive)",
+    )
+    parser.add_argument(
+        "--end-iter",
+        type=int,
+        help="End iteration for cumulative-fresh (1-based, inclusive)",
+    )
 
     args = parser.parse_args()
 
@@ -570,6 +584,10 @@ if __name__ == "__main__":
         print(f"   Source dir: {args.source_dir}")
     if args.max_versions:
         print(f"   Max versions: {args.max_versions}")
+    if args.start_iter:
+        print(f"   Start iteration: {args.start_iter}")
+    if args.end_iter:
+        print(f"   End iteration: {args.end_iter}")
     print()
 
     run_pipeline(
@@ -584,4 +602,6 @@ if __name__ == "__main__":
         threshold=args.threshold,
         max_versions=args.max_versions,
         source_dir=args.source_dir,
+        start_iter=args.start_iter,
+        end_iter=args.end_iter,
     )
