@@ -7,13 +7,16 @@ Shared utilities for Doc2Vec training pipelines.
 
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from tqdm import tqdm
 from gensim.models.doc2vec import TaggedDocument
 
 
-def clone_repo(github_url: str, dest_dir: str = None, version: str = None, shallow: bool = True) -> Path:
+def clone_repo(
+    github_url: str, dest_dir: str = None, version: str = None, shallow: bool = True
+) -> Path:
     """Clone a GitHub repository and optionally checkout a specific version.
 
     Args:
@@ -35,15 +38,13 @@ def clone_repo(github_url: str, dest_dir: str = None, version: str = None, shall
         print(f"Repository cloned to: {dest_dir}")
 
         # Checkout the specific version
-        subprocess.run(
-            ["git", "checkout", version],
-            cwd=dest_dir,
-            check=True
-        )
+        subprocess.run(["git", "checkout", version], cwd=dest_dir, check=True)
         print(f"Checked out version: {version}")
     elif shallow:
         # Shallow clone for latest version (faster)
-        subprocess.run(["git", "clone", "--depth", "1", github_url, dest_dir], check=True)
+        subprocess.run(
+            ["git", "clone", "--depth", "1", github_url, dest_dir], check=True
+        )
         print(f"Repository cloned to: {dest_dir}")
     else:
         # Full clone without checking out a specific version
@@ -65,10 +66,12 @@ def get_source_files(repo_path: Path, extensions: list[str]) -> list[Path]:
 def tokenize_code(code: str) -> list[str]:
     """Simple regex-based code tokenizer."""
     tokens = re.findall(r"[A-Za-z_][A-Za-z_0-9]*", code)
-    return [t.lower() for t in tokens if len(t) > 1]
+    return [sys.intern(t.lower()) for t in tokens if len(t) > 1]
 
 
-def prepare_documents(files: list[Path], repo_root: Path, tag_prefix: str = None) -> list[TaggedDocument]:
+def prepare_documents(
+    files: list[Path], repo_root: Path, tag_prefix: str = None
+) -> list[TaggedDocument]:
     """
     Prepare TaggedDocument objects for training.
 
@@ -124,9 +127,11 @@ def get_version_tags(repo_path: str | Path, tag_regex: str) -> list[str]:
     result = subprocess.run(
         ["git", "tag", "--list", "--sort=version:refname"],
         cwd=str(repo_path),
-        capture_output=True, text=True, check=True
+        capture_output=True,
+        text=True,
+        check=True,
     )
-    all_tags = [t.strip() for t in result.stdout.strip().split('\n') if t.strip()]
+    all_tags = [t.strip() for t in result.stdout.strip().split("\n") if t.strip()]
     pattern = re.compile(tag_regex)
     tags = [t for t in all_tags if pattern.match(t)]
     print(f"Found {len(tags)} tags matching '{tag_regex}' (from {len(all_tags)} total)")
@@ -142,12 +147,11 @@ def checkout_version(repo_path: str | Path, version: str):
     """
     subprocess.run(
         ["git", "checkout", version],
-        cwd=str(repo_path), check=True,
-        capture_output=True
+        cwd=str(repo_path),
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
-        ["git", "clean", "-fdx"],
-        cwd=str(repo_path), check=True,
-        capture_output=True
+        ["git", "clean", "-fdx"], cwd=str(repo_path), check=True, capture_output=True
     )
     print(f"Checked out version: {version}")
