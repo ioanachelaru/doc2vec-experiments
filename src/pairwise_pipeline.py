@@ -373,14 +373,16 @@ def _run_cumulative_fresh(
         # Fresh base model
         model = load_base_model(base_model_path)
 
-        # Fine-tune on all current versions (streamed from disk)
-        total_documents = sum(version_meta[v]["count"] for v in current_versions)
-        corpus = DiskBackedCorpus(
-            [version_meta[v]["path"] for v in current_versions], total_documents
-        )
-        model = finetune_model(model, corpus, epochs=epochs, update_vocab=True)
+        # Load all documents into memory for training (~50MB for 12k docs,
+        # trivial vs the 2GB model). Using a plain list avoids SEGV that
+        # occurs when gensim's Cython training code iterates DiskBackedCorpus.
+        all_docs = []
+        for v in current_versions:
+            all_docs.extend(_load_version_docs(version_meta[v]))
+        total_documents = len(all_docs)
+        model = finetune_model(model, all_docs, epochs=epochs, update_vocab=True)
         print(f"  Fine-tuned on {total_documents} documents, vocab={len(model.wv)}")
-        del corpus
+        del all_docs
 
         # Embeddings: infer test version first, then stream train versions
         # to disk to limit peak memory
