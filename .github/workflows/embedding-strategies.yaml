@@ -329,10 +329,22 @@ jobs:
             --end-iter ${{ matrix.end_iter }} \
             $MAX_VER_FLAG "${SOURCE_DIR_ARGS[@]}"
 
+      - name: Setup swap space
+        run: |
+          sudo fallocate -l 8G /swapfile2
+          sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2
+          sudo swapon /swapfile2
+          echo "Swap configured:"
+          sudo swapon --show
+          free -h
+
       - name: "Phase 2: Train and generate embeddings (fresh process)"
         run: |
           BASE_MODEL=$(find ./base_model -name "*.d2v" | head -1)
           echo "Using base model: $BASE_MODEL"
+          echo "Memory before training:"
+          free -h
 
           MAX_VER_FLAG=""
           if [ "${{ github.event.inputs.max_versions }}" != "0" ]; then
@@ -349,7 +361,7 @@ jobs:
             LABELS_ARGS=(--labels-dir "${{ steps.config.outputs.labels_dir }}")
           fi
 
-          python src/pairwise_pipeline.py \
+          python -u src/pairwise_pipeline.py \
             --phase train \
             --cache-dir /tmp/d2v_cache \
             --strategy cumulative-fresh \
