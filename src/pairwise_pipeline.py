@@ -14,11 +14,16 @@ Both strategies differ from cross_version_pipeline.py, which carries the
 fine-tuned model forward across versions (cumulative-carried).
 
 Output CSVs include version and label columns for downstream ML.
+
+Tokenized documents are cached to disk (pickle) so that memory holds only
+one version's data at a time, avoiding OOM on standard CI runners.
 """
 
 import argparse
 import json
+import pickle
 import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -39,6 +44,27 @@ from finetune_and_embed import (
 from analyze_duplicates import find_cross_version_duplicates
 
 
+class DiskBackedCorpus:
+    """Streams TaggedDocuments from pickled version files.
+
+    Loads one version at a time from disk during iteration, so peak memory
+    is O(largest_version) instead of O(all_versions).  Supports multiple
+    iterations (gensim calls __iter__ once per training epoch).
+    """
+
+    def __init__(self, paths: list[str], total_docs: int):
+        self.paths = paths
+        self._total_docs = total_docs
+
+    def __iter__(self):
+        for p in self.paths:
+            with open(p, "rb") as f:
+                yield from pickle.load(f)
+
+    def __len__(self):
+        return self._total_docs
+
+
 def _load_labels(labels_dir: Path, version: str) -> dict[str, str]:
     """Load bug labels for a single version.
 
@@ -56,24 +82,30 @@ def _load_labels(labels_dir: Path, version: str) -> dict[str, str]:
     return dict(zip(df["filepath"], df["label"]))
 
 
-def _prepare_all_versions(
+def _tokenize_to_disk(
     repo_dir: Path,
     versions: list[str],
     extensions: list[str],
     source_dir: str | None,
-) -> dict[str, list]:
-    """Checkout each version, tokenize files, return documents per version.
+    cache_dir: Path,
+) -> dict[str, dict]:
+    """Checkout each version, tokenize files, and save docs to disk.
+
+    Each version's documents are pickled to a separate file so they can be
+    loaded independently later, keeping memory usage proportional to a single
+    version rather than all versions combined.
 
     Args:
         repo_dir: Path to cloned repository
         versions: List of version tags
         extensions: File extensions to include
         source_dir: Optional subdirectory filter
+        cache_dir: Directory to store pickled document files
 
     Returns:
-        Dict mapping version tag -> list of TaggedDocument
+        Dict mapping version tag -> {"path": str, "count": int}
     """
-    version_docs = {}
+    version_meta: dict[str, dict] = {}
     search_path = repo_dir / source_dir if source_dir else repo_dir
 
     for v in versions:
@@ -81,12 +113,22 @@ def _prepare_all_versions(
         files = get_source_files(search_path, extensions)
         docs = prepare_documents(files, repo_dir, tag_prefix=v)
         if docs:
-            version_docs[v] = docs
-            print(f"  {v}: {len(docs)} files")
+            pkl_path = cache_dir / f"{v}.pkl"
+            with open(pkl_path, "wb") as f:
+                pickle.dump(docs, f, protocol=pickle.HIGHEST_PROTOCOL)
+            version_meta[v] = {"path": str(pkl_path), "count": len(docs)}
+            print(f"  {v}: {len(docs)} files (cached to disk)")
+            del docs
         else:
             print(f"  {v}: no source files, skipping")
 
-    return version_docs
+    return version_meta
+
+
+def _load_version_docs(meta: dict) -> list:
+    """Load a single version's documents from its pickle cache file."""
+    with open(meta["path"], "rb") as f:
+        return pickle.load(f)
 
 
 def _add_version_and_label(
@@ -134,7 +176,7 @@ def _leakage_stats(
 
 def _run_pairwise(
     versions: list[str],
-    version_docs: dict[str, list],
+    version_meta: dict[str, dict],
     base_model_path: str,
     label_cache: dict[str, dict[str, str]],
     epochs: int,
@@ -145,7 +187,7 @@ def _run_pairwise(
 
     For each pair (vN, vN+1):
       1. Load fresh base model
-      2. Fine-tune on vN + vN+1 documents together
+      2. Fine-tune on vN + vN+1 documents together (streamed from disk)
       3. Generate embeddings for both versions via infer_vector
       4. Merge bug labels into the embeddings CSV
       5. Run duplicate/leakage analysis (vN = train, vN+1 = test)
@@ -162,16 +204,23 @@ def _run_pairwise(
         # Fresh base model
         model = load_base_model(base_model_path)
 
-        # Fine-tune on both versions
-        combined_docs = version_docs[va] + version_docs[vb]
-        total_documents = len(combined_docs)
-        model = finetune_model(model, combined_docs, epochs=epochs, update_vocab=True)
+        # Fine-tune on both versions (streamed from disk)
+        total_documents = version_meta[va]["count"] + version_meta[vb]["count"]
+        corpus = DiskBackedCorpus(
+            [version_meta[va]["path"], version_meta[vb]["path"]], total_documents
+        )
+        model = finetune_model(model, corpus, epochs=epochs, update_vocab=True)
         print(f"  Fine-tuned on {total_documents} documents, vocab={len(model.wv)}")
-        del combined_docs
+        del corpus
 
-        # Embeddings via infer_vector
-        emb_a = generate_embeddings_infer(model, version_docs[va])
-        emb_b = generate_embeddings_infer(model, version_docs[vb])
+        # Embeddings via infer_vector (load one version at a time)
+        docs_a = _load_version_docs(version_meta[va])
+        emb_a = generate_embeddings_infer(model, docs_a)
+        del docs_a
+
+        docs_b = _load_version_docs(version_meta[vb])
+        emb_b = generate_embeddings_infer(model, docs_b)
+        del docs_b
 
         # Add version + label columns
         emb_a_labeled = _add_version_and_label(emb_a, va, label_cache)
@@ -222,7 +271,7 @@ def _run_pairwise(
 
 def _run_cumulative_fresh(
     versions: list[str],
-    version_docs: dict[str, list],
+    version_meta: dict[str, dict],
     base_model_path: str,
     label_cache: dict[str, dict[str, str]],
     epochs: int,
@@ -235,7 +284,7 @@ def _run_cumulative_fresh(
 
     For each iteration i (2 versions, 3 versions, ...):
       1. Load fresh base model
-      2. Fine-tune on all documents from v0..vi together
+      2. Fine-tune on all documents from v0..vi (streamed from disk)
       3. Generate embeddings for all versions via infer_vector
       4. Merge bug labels into the embeddings CSV
       5. Run leakage analysis (v0..vi-1 = train, vi = test)
@@ -265,19 +314,21 @@ def _run_cumulative_fresh(
         # Fresh base model
         model = load_base_model(base_model_path)
 
-        # Fine-tune on all current versions together
-        combined_docs = []
-        for v in current_versions:
-            combined_docs.extend(version_docs[v])
-
-        model = finetune_model(model, combined_docs, epochs=epochs, update_vocab=True)
-        total_documents = len(combined_docs)
+        # Fine-tune on all current versions (streamed from disk)
+        total_documents = sum(version_meta[v]["count"] for v in current_versions)
+        corpus = DiskBackedCorpus(
+            [version_meta[v]["path"] for v in current_versions], total_documents
+        )
+        model = finetune_model(model, corpus, epochs=epochs, update_vocab=True)
         print(f"  Fine-tuned on {total_documents} documents, vocab={len(model.wv)}")
-        del combined_docs
+        del corpus
 
         # Embeddings: infer test version first, then stream train versions
         # to disk to limit peak memory
-        test_emb = generate_embeddings_infer(model, version_docs[test_version])
+        test_docs = _load_version_docs(version_meta[test_version])
+        test_emb = generate_embeddings_infer(model, test_docs)
+        del test_docs
+
         test_size = len(test_emb)
         files_per_version = {test_version: test_size}
 
@@ -288,7 +339,10 @@ def _run_cumulative_fresh(
         all_leakage_dups = []
 
         for tv in train_versions:
-            train_emb = generate_embeddings_infer(model, version_docs[tv])
+            train_docs = _load_version_docs(version_meta[tv])
+            train_emb = generate_embeddings_infer(model, train_docs)
+            del train_docs
+
             files_per_version[tv] = len(train_emb)
             train_size += len(train_emb)
 
@@ -421,22 +475,26 @@ def run_pipeline(
     for i, v in enumerate(versions):
         print(f"  {i + 1}. {v}")
 
-    # Step 3: Pre-tokenize all versions (once, reused across iterations)
+    # Step 3: Tokenize all versions to disk (one at a time, memory-safe)
     print(f"\n{'=' * 60}")
-    print("Step 3: Tokenizing all versions")
+    print("Step 3: Tokenizing all versions (disk-backed)")
     print(f"{'=' * 60}")
-    version_docs = _prepare_all_versions(repo_dir, versions, extensions, source_dir)
+    cache_dir = Path(tempfile.mkdtemp(prefix="d2v_cache_"))
+    version_meta = _tokenize_to_disk(
+        repo_dir, versions, extensions, source_dir, cache_dir
+    )
     shutil.rmtree(repo_dir, ignore_errors=True)
 
-    versions_with_docs = [v for v in versions if v in version_docs]
+    versions_with_docs = [v for v in versions if v in version_meta]
     if len(versions_with_docs) < 2:
         print(
             f"Error: Need at least 2 versions with files, "
             f"found {len(versions_with_docs)}"
         )
+        shutil.rmtree(cache_dir, ignore_errors=True)
         raise SystemExit(1)
 
-    total_docs = sum(len(docs) for docs in version_docs.values())
+    total_docs = sum(m["count"] for m in version_meta.values())
     print(f"\nTotal documents: {total_docs} across {len(versions_with_docs)} versions")
 
     # Step 4: Load labels (if provided)
@@ -466,7 +524,7 @@ def run_pipeline(
     if strategy == "pairwise":
         results = _run_pairwise(
             versions_with_docs,
-            version_docs,
+            version_meta,
             base_model_path,
             label_cache,
             finetune_epochs,
@@ -476,7 +534,7 @@ def run_pipeline(
     else:
         results = _run_cumulative_fresh(
             versions_with_docs,
-            version_docs,
+            version_meta,
             base_model_path,
             label_cache,
             finetune_epochs,
@@ -485,6 +543,9 @@ def run_pipeline(
             start_iter=start_iter,
             end_iter=end_iter,
         )
+
+    # Cleanup cache
+    shutil.rmtree(cache_dir, ignore_errors=True)
 
     # Step 6: Save metadata
     elapsed_time = time.time() - start_time
@@ -495,7 +556,7 @@ def run_pipeline(
         "source_dir": source_dir,
         "labels_dir": labels_dir,
         "versions_analyzed": versions_with_docs,
-        "files_per_version": {v: len(version_docs[v]) for v in versions_with_docs},
+        "files_per_version": {v: version_meta[v]["count"] for v in versions_with_docs},
         "embedding_mode": "infer_vector (epochs=200)",
         "finetune_epochs": finetune_epochs,
         "threshold": threshold,
