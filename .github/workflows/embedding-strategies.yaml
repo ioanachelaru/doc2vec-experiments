@@ -302,15 +302,6 @@ jobs:
             -n ${{ steps.config.outputs.base_model_artifact }} \
             -D ./base_model
 
-      - name: Setup swap space
-        run: |
-          echo "Setting up additional swap space..."
-          sudo fallocate -l 16G /swapfile2
-          sudo chmod 600 /swapfile2
-          sudo mkswap /swapfile2
-          sudo swapon /swapfile2
-          sudo swapon --show
-
       - name: Run cumulative-fresh chunk
         run: |
           BASE_MODEL=$(find ./base_model -name "*.d2v" | head -1)

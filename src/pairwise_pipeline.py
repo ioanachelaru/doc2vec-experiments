@@ -23,6 +23,8 @@ import argparse
 import json
 import pickle
 import shutil
+import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -31,10 +33,7 @@ import pandas as pd
 
 from utils import (
     clone_repo,
-    get_source_files,
-    prepare_documents,
     get_version_tags,
-    checkout_version,
 )
 from finetune_and_embed import (
     load_base_model,
@@ -42,6 +41,33 @@ from finetune_and_embed import (
     generate_embeddings_infer,
 )
 from analyze_duplicates import find_cross_version_duplicates
+
+# Inline script run as a subprocess to tokenize one version.
+# Each invocation starts a fresh Python process — when it exits, the OS
+# reclaims ALL memory, eliminating heap fragmentation that accumulates
+# across 20+ alloc/free cycles in a single long-lived process.
+_TOKENIZE_WORKER = """\
+import json, pickle, sys
+from pathlib import Path
+from utils import checkout_version, get_source_files, prepare_documents
+
+repo_dir = Path(sys.argv[1])
+version = sys.argv[2]
+extensions = sys.argv[3].split(",")
+search_path = Path(sys.argv[4])
+pkl_path = sys.argv[5]
+meta_path = sys.argv[6]
+
+checkout_version(repo_dir, version)
+files = get_source_files(search_path, extensions)
+docs = prepare_documents(files, repo_dir, tag_prefix=version)
+count = len(docs) if docs else 0
+if docs:
+    with open(pkl_path, "wb") as f:
+        pickle.dump(docs, f, protocol=pickle.HIGHEST_PROTOCOL)
+with open(meta_path, "w") as f:
+    json.dump({"count": count}, f)
+"""
 
 
 class DiskBackedCorpus:
@@ -91,9 +117,10 @@ def _tokenize_to_disk(
 ) -> dict[str, dict]:
     """Checkout each version, tokenize files, and save docs to disk.
 
-    Each version's documents are pickled to a separate file so they can be
-    loaded independently later, keeping memory usage proportional to a single
-    version rather than all versions combined.
+    Each version is tokenized in a **separate subprocess** so the OS reclaims
+    all memory when the subprocess exits.  This prevents heap fragmentation
+    from accumulating across 20+ versions in a single process (the root cause
+    of OOM/SIGSEGV on 7 GB CI runners).
 
     Args:
         repo_dir: Path to cloned repository
@@ -106,19 +133,35 @@ def _tokenize_to_disk(
         Dict mapping version tag -> {"path": str, "count": int}
     """
     version_meta: dict[str, dict] = {}
-    search_path = repo_dir / source_dir if source_dir else repo_dir
+    search_path = str(repo_dir / source_dir) if source_dir else str(repo_dir)
+    src_dir = str(Path(__file__).parent)
 
     for v in versions:
-        checkout_version(repo_dir, v)
-        files = get_source_files(search_path, extensions)
-        docs = prepare_documents(files, repo_dir, tag_prefix=v)
-        if docs:
-            pkl_path = cache_dir / f"{v}.pkl"
-            with open(pkl_path, "wb") as f:
-                pickle.dump(docs, f, protocol=pickle.HIGHEST_PROTOCOL)
-            version_meta[v] = {"path": str(pkl_path), "count": len(docs)}
-            print(f"  {v}: {len(docs)} files (cached to disk)")
-            del docs
+        pkl_path = str(cache_dir / f"{v}.pkl")
+        meta_path = str(cache_dir / f"{v}.meta.json")
+
+        subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                _TOKENIZE_WORKER,
+                str(repo_dir),
+                v,
+                ",".join(extensions),
+                search_path,
+                pkl_path,
+                meta_path,
+            ],
+            check=True,
+            cwd=src_dir,
+        )
+
+        with open(meta_path) as f:
+            count = json.load(f)["count"]
+
+        if count > 0:
+            version_meta[v] = {"path": pkl_path, "count": count}
+            print(f"  {v}: {count} files (cached to disk)")
         else:
             print(f"  {v}: no source files, skipping")
 
