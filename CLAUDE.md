@@ -29,6 +29,8 @@ A pipeline for training Doc2Vec models on source code and detecting cross-versio
 - Embeddings via `infer_vector` (200 inference epochs) — computes vectors from actual document tokens, so identical code always produces identical vectors
 - Cumulative training: versions are trained one at a time in semver order; embeddings are inferred after all training completes
 - Fresh-base strategies: pairwise (fresh model per pair) and cumulative-fresh (fresh model, growing window) — both reset to base model each iteration, unlike cumulative-carried. Cumulative-fresh supports `--start-iter`/`--end-iter` for parallel CI execution (5 chunk jobs)
+- Phase-split CI execution: `--phase tokenize` (lightweight process, no gensim/numpy/sklearn imports) clones, discovers versions, tokenizes via subprocesses, saves state to `--cache-dir`. `--phase train` (fresh process) loads cached tokens and model, trains, generates embeddings. Prevents heap fragmentation from accumulating across tokenization and model loading in a single process.
+- All heavy imports (gensim, pandas, sklearn, numpy) are lazy — imported inside strategy functions, not at module level — so the tokenize phase stays under ~50MB RSS
 - Duplicate classification: **same_file/same_method** (same filepath/method across versions) vs **collision** (different files/methods with similar embeddings)
 
 ### Data Layout
@@ -86,14 +88,14 @@ python src/method_level_pipeline.py \
   - Inputs: `strategy` (pairwise or cumulative-fresh), `project` (django or calcite), `max_versions`, etc.
   - Each iteration loads a fresh base model (not carried forward)
   - **Pairwise**: single job (~2.5 h)
-  - **Cumulative-fresh**: 5 parallel chunk jobs (iterations 1-5, 6-10, 11-15, 16-20, 21-30) + merge job for combined summary. Chunks beyond the iteration count exit early with no results.
+  - **Cumulative-fresh**: 5 parallel chunk jobs (iterations 1-5, 6-10, 11-15, 16-20, 21-30) + merge job for combined summary. Each chunk runs in two phases (`--phase tokenize` then `--phase train`) as separate Python processes to avoid heap fragmentation on 7GB runners. Chunks beyond the iteration count exit early with no results.
   - Output embeddings include `version` and `label` columns for downstream ML
   - Output: `*_pair{N}_embeddings.csv` or `*_iter{N}_embeddings.csv`, `*_duplicates.csv`, metadata JSON
 
 ### Constraints
 - GitHub API: max 1000 repos per search query
 - GitHub Actions: 6-hour timeout per job
-- Memory: Uses sub-batch training - splits large document sets into chunks of `--max-docs-per-batch 5000` to avoid OOM.
+- Memory: Phase-split execution (`--phase tokenize`/`--phase train`) prevents heap fragmentation; disk-backed corpus streams documents from pickle files; subprocess-per-version tokenization ensures OS reclaims all memory per version.
 - Gensim models: Doc2Vec saves multiple files (.d2v + .npy), must upload all with `base_model_*`
 - `*_repos.txt` files are gitignored (generated output, regenerate as needed)
 - Method-level data (AST + source zips) is too large for git/CI artifacts; run `method_level_pipeline.py` locally

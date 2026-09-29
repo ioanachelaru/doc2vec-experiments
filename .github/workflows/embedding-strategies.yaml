@@ -82,7 +82,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
       - name: Cache pip dependencies
         uses: actions/cache@v3
@@ -277,7 +277,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
       - name: Cache pip dependencies
         uses: actions/cache@v3
@@ -302,11 +302,37 @@ jobs:
             -n ${{ steps.config.outputs.base_model_artifact }} \
             -D ./base_model
 
-      - name: Run cumulative-fresh chunk
+      - name: "Phase 1: Clone and tokenize (no gensim)"
+        run: |
+          echo "Chunk ${{ matrix.chunk }}: iterations ${{ matrix.start_iter }}-${{ matrix.end_iter }}"
+
+          MAX_VER_FLAG=""
+          if [ "${{ github.event.inputs.max_versions }}" != "0" ]; then
+            MAX_VER_FLAG="--max-versions ${{ github.event.inputs.max_versions }}"
+          fi
+
+          SOURCE_DIR_ARGS=()
+          if [ -n "${{ steps.config.outputs.source_dir }}" ]; then
+            SOURCE_DIR_ARGS=(--source-dir "${{ steps.config.outputs.source_dir }}")
+          fi
+
+          python src/pairwise_pipeline.py \
+            --phase tokenize \
+            --cache-dir /tmp/d2v_cache \
+            --strategy cumulative-fresh \
+            --repo "${{ steps.config.outputs.repo_url }}" \
+            --base-model unused \
+            --tag-regex "${{ steps.config.outputs.tag_regex }}" \
+            --ext ${{ steps.config.outputs.file_extensions }} \
+            --output unused \
+            --start-iter ${{ matrix.start_iter }} \
+            --end-iter ${{ matrix.end_iter }} \
+            $MAX_VER_FLAG "${SOURCE_DIR_ARGS[@]}"
+
+      - name: "Phase 2: Train and generate embeddings (fresh process)"
         run: |
           BASE_MODEL=$(find ./base_model -name "*.d2v" | head -1)
           echo "Using base model: $BASE_MODEL"
-          echo "Chunk ${{ matrix.chunk }}: iterations ${{ matrix.start_iter }}-${{ matrix.end_iter }}"
 
           MAX_VER_FLAG=""
           if [ "${{ github.event.inputs.max_versions }}" != "0" ]; then
@@ -324,6 +350,8 @@ jobs:
           fi
 
           python src/pairwise_pipeline.py \
+            --phase train \
+            --cache-dir /tmp/d2v_cache \
             --strategy cumulative-fresh \
             --repo "${{ steps.config.outputs.repo_url }}" \
             --base-model "$BASE_MODEL" \
@@ -380,7 +408,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
       - name: Merge metadata and write summary
         run: |

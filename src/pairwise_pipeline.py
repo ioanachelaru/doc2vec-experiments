@@ -17,7 +17,12 @@ Output CSVs include version and label columns for downstream ML.
 
 Tokenized documents are cached to disk (pickle) so that memory holds only
 one version's data at a time, avoiding OOM on standard CI runners.
+
+In CI, the pipeline runs in two separate processes (--phase tokenize / train)
+so that the model-loading process starts with a completely clean heap.
 """
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -28,19 +33,11 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd
 
-from utils import (
-    clone_repo,
-    get_version_tags,
-)
-from finetune_and_embed import (
-    load_base_model,
-    finetune_model,
-    generate_embeddings_infer,
-)
-from analyze_duplicates import find_cross_version_duplicates
 
 # Inline script run as a subprocess to tokenize one version.
 # Each invocation starts a fresh Python process — when it exits, the OS
@@ -101,6 +98,8 @@ def _load_labels(labels_dir: Path, version: str) -> dict[str, str]:
     Returns:
         Dict mapping filepath -> label ('buggy' or 'clean')
     """
+    import pandas as pd
+
     label_file = labels_dir / f"{version}.csv"
     if not label_file.exists():
         return {}
@@ -119,8 +118,7 @@ def _tokenize_to_disk(
 
     Each version is tokenized in a **separate subprocess** so the OS reclaims
     all memory when the subprocess exits.  This prevents heap fragmentation
-    from accumulating across 20+ versions in a single process (the root cause
-    of OOM/SIGSEGV on 7 GB CI runners).
+    from accumulating across 20+ versions in a single process.
 
     Args:
         repo_dir: Path to cloned repository
@@ -235,6 +233,15 @@ def _run_pairwise(
       4. Merge bug labels into the embeddings CSV
       5. Run duplicate/leakage analysis (vN = train, vN+1 = test)
     """
+    import pandas as pd
+
+    from analyze_duplicates import find_cross_version_duplicates
+    from finetune_and_embed import (
+        load_base_model,
+        finetune_model,
+        generate_embeddings_infer,
+    )
+
     results = []
 
     for i in range(len(versions) - 1):
@@ -336,6 +343,15 @@ def _run_cumulative_fresh(
         start_iter: If set, skip iterations before this (1-based, inclusive)
         end_iter: If set, stop after this iteration (1-based, inclusive)
     """
+    import pandas as pd
+
+    from analyze_duplicates import find_cross_version_duplicates
+    from finetune_and_embed import (
+        load_base_model,
+        finetune_model,
+        generate_embeddings_infer,
+    )
+
     results = []
 
     for i in range(1, len(versions)):
@@ -446,55 +462,38 @@ def _run_cumulative_fresh(
     return results
 
 
-def run_pipeline(
-    strategy: str,
+# ── Phase-split pipeline (CI uses two processes) ─────────────
+
+
+def run_tokenize_phase(
     repo_url: str,
-    base_model_path: str,
     tag_regex: str,
     extensions: list[str],
-    output_prefix: str,
-    labels_dir: str | None = None,
-    finetune_epochs: int = 10,
-    threshold: float = 0.99,
+    cache_dir: str,
     max_versions: int | None = None,
     source_dir: str | None = None,
+    strategy: str = "cumulative-fresh",
     start_iter: int | None = None,
     end_iter: int | None = None,
-) -> dict:
-    """Run the embedding strategy pipeline.
+):
+    """Phase 1: clone repo, discover versions, tokenize to disk, exit.
 
-    Args:
-        strategy: 'pairwise' or 'cumulative-fresh'
-        repo_url: GitHub repository URL
-        base_model_path: Path to pre-trained base Doc2Vec model
-        tag_regex: Regex pattern for git tags
-        extensions: File extensions to include
-        output_prefix: Prefix for output files
-        labels_dir: Optional path to bug label CSVs
-        finetune_epochs: Number of fine-tuning epochs
-        threshold: Cosine similarity threshold
-        max_versions: Optional limit on versions
-        source_dir: Optional subdirectory filter
-        start_iter: Start iteration for cumulative-fresh (1-based, inclusive)
-        end_iter: End iteration for cumulative-fresh (1-based, inclusive)
-
-    Returns:
-        Metadata dict with configuration and results
+    Runs in its own process so that ALL memory (heap, gensim, numpy) is
+    reclaimed by the OS before the training process starts.
     """
-    start_time = time.time()
+    from utils import clone_repo, get_version_tags
 
-    # Step 1: Clone repo (full clone for tag access)
+    cache_path = Path(cache_dir)
+    cache_path.mkdir(parents=True, exist_ok=True)
+
+    # Clone
     print(f"\n{'=' * 60}")
-    print("Step 1: Cloning repository")
+    print("Phase 1: Clone and tokenize")
     print(f"{'=' * 60}")
     repo_dir = clone_repo(repo_url, shallow=False)
 
-    # Step 2: Discover version tags
-    print(f"\n{'=' * 60}")
-    print("Step 2: Discovering version tags")
-    print(f"{'=' * 60}")
+    # Discover versions
     versions = get_version_tags(repo_dir, tag_regex)
-
     if max_versions:
         versions = versions[:max_versions]
 
@@ -503,8 +502,7 @@ def run_pipeline(
         shutil.rmtree(repo_dir, ignore_errors=True)
         raise SystemExit(1)
 
-    # For chunked cumulative-fresh, only tokenize the versions we need.
-    # Iteration i uses versions 0..i, so end_iter needs versions 0..end_iter.
+    # Version trimming for chunks
     if strategy == "cumulative-fresh" and end_iter is not None:
         needed = min(end_iter + 1, len(versions))
         if needed < len(versions):
@@ -518,13 +516,12 @@ def run_pipeline(
     for i, v in enumerate(versions):
         print(f"  {i + 1}. {v}")
 
-    # Step 3: Tokenize all versions to disk (one at a time, memory-safe)
+    # Tokenize (subprocess per version)
     print(f"\n{'=' * 60}")
-    print("Step 3: Tokenizing all versions (disk-backed)")
+    print("Tokenizing all versions (subprocess per version)")
     print(f"{'=' * 60}")
-    cache_dir = Path(tempfile.mkdtemp(prefix="d2v_cache_"))
     version_meta = _tokenize_to_disk(
-        repo_dir, versions, extensions, source_dir, cache_dir
+        repo_dir, versions, extensions, source_dir, cache_path
     )
     shutil.rmtree(repo_dir, ignore_errors=True)
 
@@ -534,18 +531,62 @@ def run_pipeline(
             f"Error: Need at least 2 versions with files, "
             f"found {len(versions_with_docs)}"
         )
-        shutil.rmtree(cache_dir, ignore_errors=True)
         raise SystemExit(1)
 
     total_docs = sum(m["count"] for m in version_meta.values())
-    print(f"\nTotal documents: {total_docs} across {len(versions_with_docs)} versions")
+    print(f"\nTotal: {total_docs} documents across {len(versions_with_docs)} versions")
 
-    # Step 4: Load labels (if provided)
+    # Save state for phase 2
+    state = {
+        "versions_with_docs": versions_with_docs,
+        "version_meta": version_meta,
+        "total_docs": total_docs,
+    }
+    state_path = str(cache_path / "pipeline_state.json")
+    with open(state_path, "w") as f:
+        json.dump(state, f)
+    print(f"State saved to {state_path}")
+
+
+def run_train_phase(
+    cache_dir: str,
+    base_model_path: str,
+    strategy: str,
+    output_prefix: str,
+    labels_dir: str | None = None,
+    finetune_epochs: int = 10,
+    threshold: float = 0.99,
+    start_iter: int | None = None,
+    end_iter: int | None = None,
+    repo_url: str = "",
+    tag_regex: str = "",
+    source_dir: str | None = None,
+):
+    """Phase 2: load cached tokenizations, load model, train, save results.
+
+    Runs in a completely fresh process — no leftover heap from tokenization,
+    no imported gensim/numpy from the tokenize phase.
+    """
+    start_time = time.time()
+    cache_path = Path(cache_dir)
+
+    # Load state from phase 1
+    with open(cache_path / "pipeline_state.json") as f:
+        state = json.load(f)
+
+    versions_with_docs = state["versions_with_docs"]
+    version_meta = state["version_meta"]
+    total_docs = state["total_docs"]
+
+    print(f"\n{'=' * 60}")
+    print("Phase 2: Train and generate embeddings")
+    print(f"{'=' * 60}")
+    print(f"Versions: {len(versions_with_docs)}, Documents: {total_docs}")
+
+    # Load labels
     label_cache: dict[str, dict[str, str]] = {}
     if labels_dir:
-        print(f"\n{'=' * 60}")
-        print("Step 4: Loading bug labels")
-        print(f"{'=' * 60}")
+        print("\nLoading bug labels...")
         labels_path = Path(labels_dir)
         for v in versions_with_docs:
             labels = _load_labels(labels_path, v)
@@ -559,11 +600,8 @@ def run_pipeline(
             else:
                 print(f"  {v}: no labels found")
 
-    # Step 5: Run strategy
-    print(f"\n{'=' * 60}")
-    print(f"Step 5: Running {strategy} strategy")
-    print(f"{'=' * 60}")
-
+    # Run strategy
+    print(f"\nRunning {strategy} strategy...")
     if strategy == "pairwise":
         results = _run_pairwise(
             versions_with_docs,
@@ -587,10 +625,7 @@ def run_pipeline(
             end_iter=end_iter,
         )
 
-    # Cleanup cache
-    shutil.rmtree(cache_dir, ignore_errors=True)
-
-    # Step 6: Save metadata
+    # Save metadata
     elapsed_time = time.time() - start_time
     metadata = {
         "strategy": strategy,
@@ -617,9 +652,11 @@ def run_pipeline(
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
 
+    # Cleanup cache
+    shutil.rmtree(cache_dir, ignore_errors=True)
+
     print(f"\n{'=' * 60}")
     print(f"{strategy} analysis complete!")
-    print(f"  Strategy: {strategy}")
     print(f"  Versions: {len(versions_with_docs)}")
     print(f"  Iterations: {len(results)}")
     print(f"  Total time: {elapsed_time / 60:.1f} minutes")
@@ -627,6 +664,59 @@ def run_pipeline(
     print(f"{'=' * 60}")
 
     return metadata
+
+
+# ── Single-process pipeline (local use) ──────────────────────
+
+
+def run_pipeline(
+    strategy: str,
+    repo_url: str,
+    base_model_path: str,
+    tag_regex: str,
+    extensions: list[str],
+    output_prefix: str,
+    labels_dir: str | None = None,
+    finetune_epochs: int = 10,
+    threshold: float = 0.99,
+    max_versions: int | None = None,
+    source_dir: str | None = None,
+    start_iter: int | None = None,
+    end_iter: int | None = None,
+) -> dict:
+    """Run the full pipeline in a single process (for local use).
+
+    In CI, use --phase tokenize / --phase train instead to split across
+    two processes and avoid memory issues on constrained runners.
+    """
+    cache_dir = tempfile.mkdtemp(prefix="d2v_cache_")
+
+    run_tokenize_phase(
+        repo_url=repo_url,
+        tag_regex=tag_regex,
+        extensions=extensions,
+        cache_dir=cache_dir,
+        max_versions=max_versions,
+        source_dir=source_dir,
+        strategy=strategy,
+        start_iter=start_iter,
+        end_iter=end_iter,
+    )
+
+    return run_train_phase(
+        cache_dir=cache_dir,
+        base_model_path=base_model_path,
+        strategy=strategy,
+        output_prefix=output_prefix,
+        labels_dir=labels_dir,
+        finetune_epochs=finetune_epochs,
+        threshold=threshold,
+        start_iter=start_iter,
+        end_iter=end_iter,
+        repo_url=repo_url,
+        tag_regex=tag_regex,
+        source_dir=source_dir,
+    )
 
 
 if __name__ == "__main__":
@@ -683,6 +773,15 @@ if __name__ == "__main__":
         type=int,
         help="End iteration for cumulative-fresh (1-based, inclusive)",
     )
+    parser.add_argument(
+        "--phase",
+        choices=["tokenize", "train"],
+        help="Run only one phase (CI mode). Omit for single-process mode.",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        help="Cache directory for phase-split mode (shared between tokenize/train)",
+    )
 
     args = parser.parse_args()
 
@@ -703,20 +802,50 @@ if __name__ == "__main__":
         print(f"   Start iteration: {args.start_iter}")
     if args.end_iter:
         print(f"   End iteration: {args.end_iter}")
+    if args.phase:
+        print(f"   Phase: {args.phase}")
     print()
 
-    run_pipeline(
-        args.strategy,
-        args.repo,
-        args.base_model,
-        args.tag_regex,
-        args.ext,
-        args.output,
-        labels_dir=args.labels_dir,
-        finetune_epochs=args.epochs,
-        threshold=args.threshold,
-        max_versions=args.max_versions,
-        source_dir=args.source_dir,
-        start_iter=args.start_iter,
-        end_iter=args.end_iter,
-    )
+    if args.phase == "tokenize":
+        run_tokenize_phase(
+            repo_url=args.repo,
+            tag_regex=args.tag_regex,
+            extensions=args.ext,
+            cache_dir=args.cache_dir,
+            max_versions=args.max_versions,
+            source_dir=args.source_dir,
+            strategy=args.strategy,
+            start_iter=args.start_iter,
+            end_iter=args.end_iter,
+        )
+    elif args.phase == "train":
+        run_train_phase(
+            cache_dir=args.cache_dir,
+            base_model_path=args.base_model,
+            strategy=args.strategy,
+            output_prefix=args.output,
+            labels_dir=args.labels_dir,
+            finetune_epochs=args.epochs,
+            threshold=args.threshold,
+            start_iter=args.start_iter,
+            end_iter=args.end_iter,
+            repo_url=args.repo,
+            tag_regex=args.tag_regex,
+            source_dir=args.source_dir,
+        )
+    else:
+        run_pipeline(
+            args.strategy,
+            args.repo,
+            args.base_model,
+            args.tag_regex,
+            args.ext,
+            args.output,
+            labels_dir=args.labels_dir,
+            finetune_epochs=args.epochs,
+            threshold=args.threshold,
+            max_versions=args.max_versions,
+            source_dir=args.source_dir,
+            start_iter=args.start_iter,
+            end_iter=args.end_iter,
+        )
