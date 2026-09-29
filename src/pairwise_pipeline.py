@@ -406,6 +406,17 @@ def run_pipeline(
         shutil.rmtree(repo_dir, ignore_errors=True)
         raise SystemExit(1)
 
+    # For chunked cumulative-fresh, only tokenize the versions we need.
+    # Iteration i uses versions 0..i, so end_iter needs versions 0..end_iter.
+    if strategy == "cumulative-fresh" and end_iter is not None:
+        needed = min(end_iter + 1, len(versions))
+        if needed < len(versions):
+            print(
+                f"Chunk mode: trimming to {needed}/{len(versions)} versions "
+                f"(iterations {start_iter or 1}-{end_iter})"
+            )
+            versions = versions[:needed]
+
     print(f"Versions to process ({len(versions)}):")
     for i, v in enumerate(versions):
         print(f"  {i + 1}. {v}")
