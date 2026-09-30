@@ -449,6 +449,12 @@ jobs:
                   chunk = json.load(f)
               all_results.extend(chunk["results"])
               total_time = max(total_time, chunk.get("elapsed_time_minutes", 0))
+              # Each chunk only tokenizes versions needed for its iteration range,
+              # so merge files_per_version and versions_analyzed from all chunks
+              merged.setdefault("files_per_version", {}).update(chunk.get("files_per_version", {}))
+              for v in chunk.get("versions_analyzed", []):
+                  if v not in merged.get("versions_analyzed", []):
+                      merged.setdefault("versions_analyzed", []).append(v)
 
           # Sort by iteration number
           all_results.sort(key=lambda r: r["iteration"])
