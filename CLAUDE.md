@@ -19,6 +19,7 @@ A pipeline for training Doc2Vec models on source code and detecting cross-versio
 - `analyze_duplicates.py` - Find duplicate/near-duplicate embeddings (single-version and cross-version). Cosine similarity is clamped to [-1, 1] to prevent floating-point overflow false positives.
 - `pairwise_pipeline.py` - **Fresh-base-model strategies**: pairwise (fine-tune on each consecutive pair independently) and cumulative-fresh (growing version window, reset to base each time). Outputs embeddings with version + label columns for downstream ML. Runs in CI.
 - `enrich_leakage.py` - Join file-level cross-version leakage pairs with bug labels (buggy/clean) from SDP datasets
+- `analyze_leakage_summary.py` - Download CI artifacts and compare embedding-based leakage across strategies (pairwise, cumulative-fresh, cumulative-carried) and projects (Django, Calcite). Produces per-pair comparison tables and aggregate summaries.
 - `utils.py` - Shared utilities (clone_repo, tokenize_code, prepare_documents, get_version_tags)
 
 ### Key Patterns
@@ -211,6 +212,17 @@ Input: `*_pair{N}_leakage.csv` + `django-{version}.csv` label files
 Output: `*_pair{N}_leakage_labeled.csv` (enriched with `label_a`, `label_b`, `same_label`), `*_leakage_summary.csv`
 
 Method-level enrichment is built into `method_level_pipeline.py` (uses `has_bugs` from AST data directly, no separate labels needed).
+
+### Comparing Leakage Across Strategies
+```bash
+# Download all CI artifacts and produce comparison tables
+python src/analyze_leakage_summary.py --download
+
+# Re-run analysis on already-downloaded artifacts
+python src/analyze_leakage_summary.py --results-dir results
+```
+
+Output: `results/leakage_comparison_django.csv`, `results/leakage_comparison_calcite.csv`, `results/leakage_summary.csv`
 
 ## Current Task (HRIA)
 - File-level cross-version analysis done for Django (26 versions) and Calcite (16 versions)
