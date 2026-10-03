@@ -1,0 +1,10 @@
+# Cosine similarity between Doc2Vec embeddings of same-path files across consecutive versions.
+# Each row = one file that exists in both versions, with the cosine similarity of its embeddings.
+# No threshold cutoff — all matched files are included regardless of similarity.
+project,strategy,num_pairs,total_matched,avg_mean_sim,avg_pct_above_099,avg_pct_above_095
+calcite,cumulative-carried,15,21846,0.5248,9.67,9.68
+calcite,cumulative-fresh,15,21846,0.973,19.53,93.36
+calcite,pairwise,15,21846,0.9809,36.6,95.76
+django,cumulative-carried,25,17213,0.942,9.08,72.88
+django,cumulative-fresh,25,17213,0.9543,12.07,77.14
+django,pairwise,25,17213,0.9643,27.54,82.88

@@ -20,6 +20,8 @@ A pipeline for training Doc2Vec models on source code and detecting cross-versio
 - `pairwise_pipeline.py` - **Fresh-base-model strategies**: pairwise (fine-tune on each consecutive pair independently) and cumulative-fresh (growing version window, reset to base each time). Outputs embeddings with version + label columns for downstream ML. Runs in CI.
 - `enrich_leakage.py` - Join file-level cross-version leakage pairs with bug labels (buggy/clean) from SDP datasets
 - `analyze_leakage_summary.py` - Download CI artifacts and compare embedding-based leakage across strategies (pairwise, cumulative-fresh, cumulative-carried) and projects (Django, Calcite). Produces per-pair comparison tables and aggregate summaries.
+- `analyze_embedding_distances.py` - Compute cosine similarity distributions for same-path files across consecutive versions (no threshold cutoff). For each strategy and project, matches files by relative path between version pairs and computes per-file cosine similarity. Outputs per-pair stats (mean/median/min/max, pct above 0.99/0.95/0.90) and per-file detail CSVs for distribution plotting.
+- `plot_embedding_distances.py` - Generate publication-quality visualizations from the similarity CSVs: KDE distributions, per-pair trend lines, threshold exceedance bars, and aggregate summaries.
 - `utils.py` - Shared utilities (clone_repo, tokenize_code, prepare_documents, get_version_tags)
 
 ### Key Patterns
@@ -223,6 +225,32 @@ python src/analyze_leakage_summary.py --results-dir results
 ```
 
 Output: `results/embedding_leakage_comparison_django.csv`, `results/embedding_leakage_comparison_calcite.csv`, `results/embedding_leakage_summary.csv`
+
+### Embedding Similarity Distributions
+```bash
+# Full analysis: all strategies and projects
+python src/analyze_embedding_distances.py --results-dir results
+
+# Single strategy/project
+python src/analyze_embedding_distances.py --strategy pairwise --project django
+```
+
+For every file that exists in both train and test (same relative path across consecutive versions), computes the cosine similarity between their Doc2Vec embeddings — no threshold cutoff. Extracts version from the file path prefix (not the version column) to handle versions like 1.10 that lose precision as float.
+
+Output: `results/embedding_distances_{project}_{strategy}.csv` (per-file similarities for histogram plotting), `results/embedding_distance_summary.csv` (aggregate stats)
+
+### Plotting Similarity Distributions
+```bash
+# Generate all plots (PNG, 150 DPI)
+python src/plot_embedding_distances.py
+
+# High-DPI PDF for paper
+python src/plot_embedding_distances.py --format pdf --dpi 300
+```
+
+Reads the per-file similarity CSVs and generates 7 figures: 2 KDE distribution plots, 2 per-pair mean similarity trend lines, 2 threshold exceedance bar charts (% >= 0.99), and 1 aggregate summary.
+
+Output: `results/plots/*.png` (or `*.pdf`)
 
 ## Current Task (HRIA)
 - File-level cross-version analysis done for Django (26 versions) and Calcite (16 versions)
