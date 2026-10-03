@@ -258,6 +258,20 @@ def build_summary_table(
     return pd.DataFrame(rows)
 
 
+_CSV_HEADER = (
+    "# Duplicates detected via Doc2Vec embedding cosine similarity >= 0.99.\n"
+    "# same_file = same relative path across versions; collision = different paths.\n"
+    "# Leakage % = test files with at least one near-duplicate in the training set.\n"
+)
+
+
+def _write_csv_with_header(df: pd.DataFrame, path: Path) -> None:
+    """Write a DataFrame to CSV with a comment header explaining the methodology."""
+    with open(path, "w", newline="") as f:
+        f.write(_CSV_HEADER)
+        df.to_csv(f, index=False)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Compare embedding-based leakage across strategies and projects."
@@ -300,8 +314,8 @@ def main():
 
         log.info(df.to_string(index=False))
 
-        csv_path = results_dir / f"leakage_comparison_{project}.csv"
-        df.to_csv(csv_path, index=False)
+        csv_path = results_dir / f"embedding_leakage_comparison_{project}.csv"
+        _write_csv_with_header(df, csv_path)
         log.info(f"\n  Saved -> {csv_path}")
 
     # Aggregate summary
@@ -313,8 +327,8 @@ def main():
     if not summary_df.empty:
         log.info(summary_df.to_string(index=False))
 
-        csv_path = results_dir / "leakage_summary.csv"
-        summary_df.to_csv(csv_path, index=False)
+        csv_path = results_dir / "embedding_leakage_summary.csv"
+        _write_csv_with_header(summary_df, csv_path)
         log.info(f"\n  Saved -> {csv_path}")
 
 

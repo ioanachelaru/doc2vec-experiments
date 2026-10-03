@@ -1,3 +1,6 @@
+# Duplicates detected via Doc2Vec embedding cosine similarity >= 0.99.
+# same_file = same relative path across versions; collision = different paths.
+# Leakage % = test files with at least one near-duplicate in the training set.
 pair,train_version,test_version,test_size,pairwise_leakage_pct,pairwise_same_file,pairwise_collision,cumulative_fresh_leakage_pct,cumulative_fresh_same_file,cumulative_fresh_collision,cumulative_carried_leakage_pct,cumulative_carried_same_file,cumulative_carried_collision
 1,1.0,1.1,545,19.82,107,1,19.27,104,1,12.66,67,2
 2,1.1,1.2,673,17.24,116,0,13.37,127,1,11.29,97,1
