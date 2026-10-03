@@ -211,3 +211,6 @@ resources/*/ast_level/
 resources/*/source_code/
 resources/*/line_level/
 resources/cross-version-*/
+results/pairwise-*/
+results/cumulative-fresh-*/
+results/cross-version-*/
