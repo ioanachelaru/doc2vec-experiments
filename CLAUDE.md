@@ -222,7 +222,7 @@ python src/analyze_leakage_summary.py --download
 python src/analyze_leakage_summary.py --results-dir results
 ```
 
-Output: `results/leakage_comparison_django.csv`, `results/leakage_comparison_calcite.csv`, `results/leakage_summary.csv`
+Output: `results/embedding_leakage_comparison_django.csv`, `results/embedding_leakage_comparison_calcite.csv`, `results/embedding_leakage_summary.csv`
 
 ## Current Task (HRIA)
 - File-level cross-version analysis done for Django (26 versions) and Calcite (16 versions)

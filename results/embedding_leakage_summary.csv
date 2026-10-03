@@ -1,3 +1,6 @@
+# Duplicates detected via Doc2Vec embedding cosine similarity >= 0.99.
+# same_file = same relative path across versions; collision = different paths.
+# Leakage % = test files with at least one near-duplicate in the training set.
 project,strategy,num_pairs,avg_leakage_pct,median_leakage_pct,max_leakage_pct,min_leakage_pct,total_same_file_pairs,total_collision_pairs
 calcite,cumulative-carried,15,97.93,98.42,100.0,94.39,3958,164616
 calcite,cumulative-fresh,15,21.79,20.46,33.31,14.78,13391,276
