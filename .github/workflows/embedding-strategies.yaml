@@ -8,6 +8,7 @@ on:
         required: true
         type: choice
         options:
+          - both
           - pairwise
           - cumulative-fresh
 
@@ -31,6 +32,14 @@ on:
         default: '10'
         type: string
 
+      vector_size:
+        description: 'Base model embedding dimension'
+        required: true
+        type: choice
+        options:
+          - '200'
+          - '400'
+
       duplicate_threshold:
         description: 'Cosine similarity threshold for duplicate detection'
         required: false
@@ -46,7 +55,7 @@ jobs:
 
   # ── Pairwise (single job, unchanged) ────────────────────────
   pairwise:
-    if: github.event.inputs.strategy == 'pairwise'
+    if: github.event.inputs.strategy == 'pairwise' || github.event.inputs.strategy == 'both'
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
@@ -59,6 +68,8 @@ jobs:
         run: |
           PROJECT="${{ github.event.inputs.project }}"
 
+          VECSIZE="${{ github.event.inputs.vector_size }}"
+
           if [ "$PROJECT" = "django" ]; then
             echo "repo_url=https://github.com/django/django.git" >> $GITHUB_OUTPUT
             echo "repo_name=django" >> $GITHUB_OUTPUT
@@ -66,8 +77,12 @@ jobs:
             echo "file_extensions=.py" >> $GITHUB_OUTPUT
             echo "source_dir=django" >> $GITHUB_OUTPUT
             echo "labels_dir=resources/django 1/file_level" >> $GITHUB_OUTPUT
-            echo "base_model_run_id=32718528477" >> $GITHUB_OUTPUT
             echo "base_model_artifact=base-model-python-100repos" >> $GITHUB_OUTPUT
+            if [ "$VECSIZE" = "200" ]; then
+              echo "base_model_run_id=37197438933" >> $GITHUB_OUTPUT
+            else
+              echo "base_model_run_id=32718528477" >> $GITHUB_OUTPUT
+            fi
           elif [ "$PROJECT" = "calcite" ]; then
             echo "repo_url=https://github.com/apache/calcite.git" >> $GITHUB_OUTPUT
             echo "repo_name=calcite" >> $GITHUB_OUTPUT
@@ -75,8 +90,12 @@ jobs:
             echo "file_extensions=.java" >> $GITHUB_OUTPUT
             echo "source_dir=" >> $GITHUB_OUTPUT
             echo "labels_dir=resources/calcite/file_level" >> $GITHUB_OUTPUT
-            echo "base_model_run_id=32937494910" >> $GITHUB_OUTPUT
             echo "base_model_artifact=base-model-java-100repos" >> $GITHUB_OUTPUT
+            if [ "$VECSIZE" = "200" ]; then
+              echo "base_model_run_id=32937494910" >> $GITHUB_OUTPUT
+            else
+              echo "base_model_run_id=37197450624" >> $GITHUB_OUTPUT
+            fi
           fi
 
       - name: Set up Python
@@ -120,6 +139,7 @@ jobs:
         run: |
           BASE_MODEL=$(find ./base_model -name "*.d2v" | head -1)
           echo "Using base model: $BASE_MODEL"
+          echo "Vector size: ${{ github.event.inputs.vector_size }}"
 
           MAX_VER_FLAG=""
           if [ "${{ github.event.inputs.max_versions }}" != "0" ]; then
@@ -182,6 +202,7 @@ jobs:
           |---------|-------|
           | **Strategy** | pairwise |
           | **Project** | ${{ github.event.inputs.project }} |
+          | **Vector size** | ${{ github.event.inputs.vector_size }} |
           | **Repository** | ${{ steps.config.outputs.repo_url }} |
           | **Tag regex** | ${{ steps.config.outputs.tag_regex }} |
           | **Versions analyzed** | ${VERSIONS} |
@@ -215,14 +236,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pairwise-${{ steps.config.outputs.repo_name }}
+          name: pairwise-${{ steps.config.outputs.repo_name }}-dim${{ github.event.inputs.vector_size }}
           path: |
             ${{ steps.config.outputs.repo_name }}_pairwise_*
           retention-days: 90
 
   # ── Cumulative-fresh: parallel chunks ───────────────────────
   cumulative-fresh:
-    if: github.event.inputs.strategy == 'cumulative-fresh'
+    if: github.event.inputs.strategy == 'cumulative-fresh' || github.event.inputs.strategy == 'both'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
@@ -254,6 +275,8 @@ jobs:
         run: |
           PROJECT="${{ github.event.inputs.project }}"
 
+          VECSIZE="${{ github.event.inputs.vector_size }}"
+
           if [ "$PROJECT" = "django" ]; then
             echo "repo_url=https://github.com/django/django.git" >> $GITHUB_OUTPUT
             echo "repo_name=django" >> $GITHUB_OUTPUT
@@ -261,8 +284,12 @@ jobs:
             echo "file_extensions=.py" >> $GITHUB_OUTPUT
             echo "source_dir=django" >> $GITHUB_OUTPUT
             echo "labels_dir=resources/django 1/file_level" >> $GITHUB_OUTPUT
-            echo "base_model_run_id=32718528477" >> $GITHUB_OUTPUT
             echo "base_model_artifact=base-model-python-100repos" >> $GITHUB_OUTPUT
+            if [ "$VECSIZE" = "200" ]; then
+              echo "base_model_run_id=37197438933" >> $GITHUB_OUTPUT
+            else
+              echo "base_model_run_id=32718528477" >> $GITHUB_OUTPUT
+            fi
           elif [ "$PROJECT" = "calcite" ]; then
             echo "repo_url=https://github.com/apache/calcite.git" >> $GITHUB_OUTPUT
             echo "repo_name=calcite" >> $GITHUB_OUTPUT
@@ -270,8 +297,12 @@ jobs:
             echo "file_extensions=.java" >> $GITHUB_OUTPUT
             echo "source_dir=" >> $GITHUB_OUTPUT
             echo "labels_dir=resources/calcite/file_level" >> $GITHUB_OUTPUT
-            echo "base_model_run_id=32937494910" >> $GITHUB_OUTPUT
             echo "base_model_artifact=base-model-java-100repos" >> $GITHUB_OUTPUT
+            if [ "$VECSIZE" = "200" ]; then
+              echo "base_model_run_id=32937494910" >> $GITHUB_OUTPUT
+            else
+              echo "base_model_run_id=37197450624" >> $GITHUB_OUTPUT
+            fi
           fi
 
       - name: Set up Python
@@ -380,7 +411,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cumulative-fresh-${{ steps.config.outputs.repo_name }}-chunk${{ matrix.chunk }}
+          name: cumulative-fresh-${{ steps.config.outputs.repo_name }}-dim${{ github.event.inputs.vector_size }}-chunk${{ matrix.chunk }}
           path: |
             ${{ steps.config.outputs.repo_name }}_cumulative-fresh_*
           retention-days: 90
@@ -388,7 +419,7 @@ jobs:
   # ── Cumulative-fresh: merge chunks & write summary ──────────
   merge-cumulative-fresh:
     needs: cumulative-fresh
-    if: github.event.inputs.strategy == 'cumulative-fresh'
+    if: github.event.inputs.strategy == 'cumulative-fresh' || github.event.inputs.strategy == 'both'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -410,7 +441,7 @@ jobs:
       - name: Download all chunk artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: cumulative-fresh-${{ steps.config.outputs.repo_name }}-chunk*
+          pattern: cumulative-fresh-${{ steps.config.outputs.repo_name }}-dim${{ github.event.inputs.vector_size }}-chunk*
           merge-multiple: true
           path: ./results
 
@@ -504,6 +535,7 @@ jobs:
           |---------|-------|
           | **Strategy** | cumulative-fresh |
           | **Project** | ${{ github.event.inputs.project }} |
+          | **Vector size** | ${{ github.event.inputs.vector_size }} |
           | **Repository** | ${{ steps.config.outputs.repo_url }} |
           | **Tag regex** | ${{ steps.config.outputs.tag_regex }} |
           | **Versions analyzed** | ${VERSIONS} |
@@ -536,6 +568,6 @@ jobs:
       - name: Upload merged results
         uses: actions/upload-artifact@v4
         with:
-          name: cumulative-fresh-${{ steps.config.outputs.repo_name }}
+          name: cumulative-fresh-${{ steps.config.outputs.repo_name }}-dim${{ github.event.inputs.vector_size }}
           path: ./results/
           retention-days: 90
