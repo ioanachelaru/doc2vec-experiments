@@ -265,15 +265,16 @@ def run_pair(
 
 
 def find_embedding_files(
-    results_dir: Path, project: str, strategy: str
+    results_dir: Path, project: str, strategy: str, dim_suffix: str = ""
 ) -> list[tuple[int, Path]]:
     """Find all embedding CSV files for a project/strategy, return sorted (pair, path) list."""
+    suffix = f"-{dim_suffix}" if dim_suffix else ""
     if strategy == "pairwise":
         pattern = f"{project}_pairwise_pair*_embeddings.csv"
-        subdir = results_dir / f"pairwise-{project}"
+        subdir = results_dir / f"pairwise-{project}{suffix}"
     else:
         pattern = f"{project}_cumulative-fresh_iter*_embeddings.csv"
-        subdir = results_dir / f"cumulative-fresh-{project}"
+        subdir = results_dir / f"cumulative-fresh-{project}{suffix}"
 
     files = []
     for p in subdir.glob(pattern):
@@ -295,19 +296,22 @@ def find_embedding_files(
     return sorted(files)
 
 
-def load_metadata(results_dir: Path, project: str, strategy: str) -> dict:
+def load_metadata(
+    results_dir: Path, project: str, strategy: str, dim_suffix: str = ""
+) -> dict:
     """Load the pipeline metadata JSON."""
+    suffix = f"-{dim_suffix}" if dim_suffix else ""
     if strategy == "pairwise":
         meta_path = (
             results_dir
-            / f"pairwise-{project}"
+            / f"pairwise-{project}{suffix}"
             / f"{project}_pairwise_pairwise_metadata.json"
         )
     else:
         # Cumulative-fresh has a merged metadata
         meta_path = (
             results_dir
-            / f"cumulative-fresh-{project}"
+            / f"cumulative-fresh-{project}{suffix}"
             / f"{project}_cumulative-fresh_cumulative_fresh_metadata.json"
         )
 
@@ -418,14 +422,22 @@ def main():
     parser.add_argument(
         "--sweep", action="store_true", help="Run threshold sweep from 0.90 to 1.00"
     )
+    parser.add_argument(
+        "--dim-suffix",
+        type=str,
+        default="",
+        help="Suffix for alternate dimension directories (e.g., '200' for pairwise-django-200)",
+    )
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir)
     output_dir = Path(args.output)
 
     # Load metadata and find embedding files
-    metadata = load_metadata(results_dir, args.project, args.strategy)
-    emb_files = find_embedding_files(results_dir, args.project, args.strategy)
+    metadata = load_metadata(results_dir, args.project, args.strategy, args.dim_suffix)
+    emb_files = find_embedding_files(
+        results_dir, args.project, args.strategy, args.dim_suffix
+    )
 
     if not emb_files:
         print(f"No embedding files found for {args.project}/{args.strategy}")
@@ -484,7 +496,8 @@ def main():
                 all_results.extend(sc_results)
 
     # Write main results
-    out_prefix = f"{args.project}_{args.strategy}"
+    dim_tag = f"_dim{args.dim_suffix}" if args.dim_suffix else ""
+    out_prefix = f"{args.project}_{args.strategy}{dim_tag}"
     write_results_csv(all_results, output_dir / f"{out_prefix}_predictions.csv")
     write_summary(all_results, output_dir / f"{out_prefix}_summary.csv")
 
