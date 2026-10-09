@@ -1,0 +1,7 @@
+leakage_method,classifier,subset,f1_macro,auc,precision_buggy,recall_buggy,precision_clean,recall_clean,mcc
+embedding_0.99,LogisticRegression,baseline,0.8556,0.9071,0.7881,0.8462,0.9154,0.8982,0.7203
+embedding_0.99,LogisticRegression,cleaned,0.8338,0.8964,0.7504,0.824,0.905,0.884,0.678
+embedding_0.99,LogisticRegression,leaked-only,0.9195,0.9376,0.8907,0.9029,0.9578,0.9564,0.8483
+embedding_0.99,RandomForest,baseline,0.8478,0.9403,0.8584,0.7414,0.8962,0.9483,0.7146
+embedding_0.99,RandomForest,cleaned,0.8145,0.9341,0.834,0.6675,0.88,0.946,0.654
+embedding_0.99,RandomForest,leaked-only,0.9228,0.9606,0.9033,0.8908,0.959,0.9657,0.8543
