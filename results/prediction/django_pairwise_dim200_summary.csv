@@ -1,0 +1,13 @@
+leakage_method,classifier,subset,f1_macro,auc,precision_buggy,recall_buggy,precision_clean,recall_clean,mcc
+embedding_0.99,LogisticRegression,baseline,0.7876,0.8723,0.6847,0.7825,0.8777,0.8427,0.5889
+embedding_0.99,LogisticRegression,cleaned,0.7645,0.8499,0.6633,0.7336,0.8552,0.8386,0.5414
+embedding_0.99,LogisticRegression,leaked-only,0.8215,0.9112,0.7054,0.8531,0.9292,0.8547,0.6636
+embedding_0.99,RandomForest,baseline,0.8519,0.9423,0.8624,0.7531,0.8981,0.9478,0.7228
+embedding_0.99,RandomForest,cleaned,0.8033,0.931,0.8517,0.6502,0.8678,0.9389,0.6385
+embedding_0.99,RandomForest,leaked-only,0.9225,0.9519,0.9032,0.8873,0.9609,0.9707,0.8552
+same_code,LogisticRegression,baseline,0.7876,0.8723,0.6847,0.7825,0.8777,0.8427,0.5889
+same_code,LogisticRegression,cleaned,0.7581,0.8369,0.7138,0.7985,0.8136,0.7491,0.5355
+same_code,LogisticRegression,leaked-only,0.7464,0.8802,0.5301,0.6995,0.9421,0.9155,0.5339
+same_code,RandomForest,baseline,0.8519,0.9423,0.8624,0.7531,0.8981,0.9478,0.7228
+same_code,RandomForest,cleaned,0.8178,0.909,0.845,0.7607,0.8415,0.8857,0.6611
+same_code,RandomForest,leaked-only,0.8932,0.9507,0.8991,0.7303,0.9578,0.9952,0.7879
