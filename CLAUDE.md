@@ -22,6 +22,7 @@ A pipeline for training Doc2Vec models on source code and detecting cross-versio
 - `analyze_leakage_summary.py` - Download CI artifacts and compare embedding-based leakage across strategies (pairwise, cumulative-fresh, cumulative-carried) and projects (Django, Calcite). Produces per-pair comparison tables and aggregate summaries.
 - `analyze_embedding_distances.py` - Compute cosine similarity distributions for same-path files across consecutive versions (no threshold cutoff). For each strategy and project, matches files by relative path between version pairs and computes per-file cosine similarity. Outputs per-pair stats (mean/median/min/max, pct above 0.99/0.95/0.90) and per-file detail CSVs for distribution plotting.
 - `plot_embedding_distances.py` - Generate publication-quality visualizations from the similarity CSVs: KDE distributions, per-pair trend lines, threshold exceedance bars, and aggregate summaries.
+- `predict_with_leakage.py` - **Supervised classification experiments**: train RF + LR on Doc2Vec embeddings, evaluate on baseline/cleaned/leaked-only subsets to measure how train/test overlap inflates defect prediction. Supports embedding-based leakage (cosine sim >= threshold), same-code ground truth comparison (from team ZIP archives), and threshold sweep (0.90–1.00). Handles Django float version precision issues (1.10→1.1).
 - `utils.py` - Shared utilities (clone_repo, tokenize_code, prepare_documents, get_version_tags)
 
 ### Key Patterns
@@ -251,6 +252,27 @@ python src/plot_embedding_distances.py --format pdf --dpi 300
 Reads the per-file similarity CSVs and generates 7 figures: 2 KDE distribution plots, 2 per-pair mean similarity trend lines, 2 threshold exceedance bar charts (% >= 0.99), and 1 aggregate summary.
 
 Output: `results/plots/*.png` (or `*.pdf`)
+
+### Supervised Classification (Leakage Impact)
+```bash
+# Pairwise with embedding-based and same-code leakage
+python src/predict_with_leakage.py --project django --strategy pairwise \
+  --same-code-zip "resources/django 1/django-same-code.zip"
+python src/predict_with_leakage.py --project calcite --strategy pairwise \
+  --same-code-zip "resources/calcite/calcite-same-code.zip"
+
+# Cumulative-fresh (embedding-based only)
+python src/predict_with_leakage.py --project django --strategy cumulative-fresh
+python src/predict_with_leakage.py --project calcite --strategy cumulative-fresh
+
+# Threshold sweep (0.90-1.00)
+python src/predict_with_leakage.py --project django --strategy pairwise --sweep
+python src/predict_with_leakage.py --project calcite --strategy pairwise --sweep
+```
+
+Trains RF(500 trees) + LR with `class_weight='balanced'` on embedding vectors. Evaluates on three subsets: baseline (full test), cleaned (non-leaked files), leaked-only. Delta(baseline - cleaned) = metric inflation from leakage. Same-code ground truth from team ZIP archives (source-code-based duplicate detection) provides an alternative leaked set for comparison.
+
+Output: `results/prediction/{project}_{strategy}_predictions.csv` (per-pair metrics), `*_summary.csv` (aggregate means), `*_threshold_sweep.csv` (sweep data)
 
 ## Current Task (HRIA)
 - File-level cross-version analysis done for Django (26 versions) and Calcite (16 versions)
