@@ -1,7 +1,4 @@
-leakage_method,classifier,subset,f1_macro,auc,precision_buggy,recall_buggy,precision_clean,recall_clean,mcc
-embedding_0.99,LogisticRegression,baseline,0.7118,0.8292,0.5749,0.7461,0.855,0.7594,0.4594
-embedding_0.99,LogisticRegression,cleaned,0.7149,0.8331,0.5721,0.7009,0.8504,0.8055,0.455
-embedding_0.99,LogisticRegression,leaked-only,0.6638,0.8068,0.5672,0.859,0.8796,0.5621,0.4289
-embedding_0.99,RandomForest,baseline,0.8277,0.9372,0.8092,0.7709,0.8913,0.926,0.6869
-embedding_0.99,RandomForest,cleaned,0.8071,0.9334,0.787,0.7363,0.8806,0.9302,0.6526
-embedding_0.99,RandomForest,leaked-only,0.8934,0.9476,0.8601,0.8893,0.9459,0.9223,0.8027
+classifier,subset,f1_macro,auc,precision_buggy,recall_buggy,precision_clean,recall_clean,mcc
+RandomForest,baseline,0.8277,0.9372,0.8092,0.7709,0.8913,0.926,0.6869
+RandomForest,changed_label,0.1601,0.1115,0.0712,0.1448,0.4497,0.227,-0.5435
+RandomForest,new_files,0.5467,0.7851,0.4879,0.3068,0.6771,0.9305,0.2573
