@@ -52,7 +52,7 @@ All 8 combinations of:
 | Strategy | Pairwise (fresh model per pair), Cumulative-fresh (growing training window) |
 | Embedding dimension | 200, 400 |
 
-**Primary dimensions**: Django uses 400-dim, Calcite uses 200-dim. Alternates are for sensitivity analysis.
+**Primary dimension**: 200 for both projects. 400-dim runs are for sensitivity analysis.
 
 ## Results
 
@@ -130,7 +130,7 @@ All plots in `results/plots/`:
 
 | Plot | Description |
 |---|---|
-| `subset_f1_comparison.png` | F1 macro by subset across strategies (primary dims) |
+| `subset_f1_comparison.png` | F1 macro by subset across strategies (dim 200) |
 | `subset_mcc_comparison.png` | MCC by subset — shows negative MCC for changed_label in pairwise |
 | `subset_auc_comparison.png` | AUC by subset — highlights near-zero AUC for pairwise changed_label |
 | `subset_per_pair_f1.png` | F1 macro per version pair for each subset (4 panels) |
