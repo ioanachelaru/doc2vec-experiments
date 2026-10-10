@@ -1,0 +1,4 @@
+classifier,subset,f1_macro,auc,precision_buggy,recall_buggy,precision_clean,recall_clean,mcc
+RandomForest,baseline,0.8488,0.9692,0.837,0.6325,0.9712,0.9907,0.708
+RandomForest,changed_label,0.2955,0.0717,0.0222,0.0083,0.5683,0.6919,-0.3077
+RandomForest,new_files,0.597,0.7587,0.0909,0.0267,0.8774,1.0,0.0473
