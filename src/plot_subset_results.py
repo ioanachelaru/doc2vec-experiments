@@ -244,6 +244,104 @@ def plot_per_pair_f1(predictions: pd.DataFrame, output_dir: Path, fmt: str, dpi:
     print(f"  Wrote subset_per_pair_f1.{fmt}")
 
 
+def plot_auc_by_subset(summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi: int):
+    """Grouped bar chart: AUC for each subset across project x strategy (primary dims)."""
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
+    fig.suptitle("AUC by Evaluation Subset — RandomForest", fontsize=14, y=1.02)
+
+    subsets = ["baseline", "new_files", "changed_label"]
+    bar_width = 0.22
+
+    for ax, project in zip(axes, ["django", "calcite"]):
+        primary = PRIMARY_DIM[project]
+        sub = summaries[
+            (summaries["project"] == project) & (summaries["dim"] == primary)
+        ]
+
+        strategies = ["pairwise", "cumulative-fresh"]
+        x = np.arange(len(strategies))
+
+        for i, subset in enumerate(subsets):
+            vals = []
+            for strategy in strategies:
+                row = sub[(sub["strategy"] == strategy) & (sub["subset"] == subset)]
+                vals.append(row["auc"].values[0] if len(row) > 0 else 0)
+            ax.bar(
+                x + i * bar_width,
+                vals,
+                bar_width,
+                label=SUBSET_LABELS[subset],
+                color=SUBSET_COLORS[subset],
+                alpha=0.85,
+            )
+
+        ax.set_xlabel("Strategy")
+        ax.set_ylabel("AUC" if project == "django" else "")
+        ax.set_title(f"{project.title()} (dim {primary})")
+        ax.set_xticks(x + bar_width)
+        ax.set_xticklabels([STRATEGY_DISPLAY[s] for s in strategies])
+        ax.set_ylim(0, 1.0)
+        ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.3, linewidth=0.8)
+        ax.legend(loc="upper right", fontsize=9)
+
+    plt.tight_layout()
+    fig.savefig(
+        output_dir / f"subset_auc_comparison.{fmt}", dpi=dpi, bbox_inches="tight"
+    )
+    plt.close()
+    print(f"  Wrote subset_auc_comparison.{fmt}")
+
+
+def plot_per_pair_auc(predictions: pd.DataFrame, output_dir: Path, fmt: str, dpi: int):
+    """Per-pair AUC trends for each subset, one panel per project x strategy (primary dims)."""
+    configs = [
+        ("django", "pairwise"),
+        ("django", "cumulative-fresh"),
+        ("calcite", "pairwise"),
+        ("calcite", "cumulative-fresh"),
+    ]
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharex=False)
+    fig.suptitle("AUC per Version Pair by Subset — RandomForest", fontsize=14, y=1.02)
+
+    subsets = ["baseline", "new_files", "changed_label"]
+
+    for ax, (project, strategy) in zip(axes.flat, configs):
+        primary = PRIMARY_DIM[project]
+        sub = predictions[
+            (predictions["project"] == project)
+            & (predictions["strategy"] == strategy)
+            & (predictions["dim"] == primary)
+        ]
+
+        for subset in subsets:
+            s = sub[sub["subset"] == subset].sort_values("pair")
+            if len(s) > 0 and "auc" in s.columns:
+                ax.plot(
+                    s["pair"],
+                    s["auc"],
+                    marker="o",
+                    markersize=4,
+                    linewidth=1.5,
+                    label=SUBSET_LABELS[subset],
+                    color=SUBSET_COLORS[subset],
+                    alpha=0.8,
+                )
+
+        strategy_label = STRATEGY_DISPLAY[strategy]
+        ax.set_title(f"{project.title()} — {strategy_label} (dim {primary})")
+        ax.set_xlabel("Version pair")
+        ax.set_ylabel("AUC")
+        ax.set_ylim(-0.05, 1.05)
+        ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.3, linewidth=0.8)
+        ax.legend(loc="lower left", fontsize=8)
+
+    plt.tight_layout()
+    fig.savefig(output_dir / f"subset_per_pair_auc.{fmt}", dpi=dpi, bbox_inches="tight")
+    plt.close()
+    print(f"  Wrote subset_per_pair_auc.{fmt}")
+
+
 def plot_dimension_comparison(
     summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi: int
 ):
@@ -315,6 +413,75 @@ def plot_dimension_comparison(
     print(f"  Wrote subset_dimension_comparison.{fmt}")
 
 
+def plot_dimension_comparison_mcc(
+    summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi: int
+):
+    """Side-by-side dim 200 vs 400 for MCC by subset, grouped by project."""
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
+    fig.suptitle("MCC: Dimension 200 vs 400 — RandomForest", fontsize=14, y=1.02)
+
+    subsets = ["baseline", "new_files", "changed_label"]
+    bar_width = 0.12
+
+    for ax, project in zip(axes, ["django", "calcite"]):
+        sub = summaries[summaries["project"] == project]
+
+        strategies = ["pairwise", "cumulative-fresh"]
+        group_width = len(subsets) * 2 * bar_width + 0.15
+        x_groups = np.arange(len(strategies)) * (group_width + 0.3)
+
+        for si, subset in enumerate(subsets):
+            for di, (dim, hatch) in enumerate([("200", ""), ("400", "//")]):
+                vals = []
+                for strategy in strategies:
+                    row = sub[
+                        (sub["strategy"] == strategy)
+                        & (sub["subset"] == subset)
+                        & (sub["dim"] == dim)
+                    ]
+                    vals.append(row["mcc"].values[0] if len(row) > 0 else 0)
+
+                offset = si * 2 * bar_width + di * bar_width
+                ax.bar(
+                    x_groups + offset,
+                    vals,
+                    bar_width,
+                    label=f"{SUBSET_LABELS[subset]} (dim {dim})",
+                    color=SUBSET_COLORS[subset],
+                    alpha=0.7 if di == 0 else 0.45,
+                    hatch=hatch,
+                    edgecolor="white" if not hatch else SUBSET_COLORS[subset],
+                )
+
+        ax.set_xlabel("Strategy")
+        ax.set_ylabel("MCC" if project == "django" else "")
+        ax.set_title(f"{project.title()}")
+        center_offset = (len(subsets) * 2 * bar_width - bar_width) / 2
+        ax.set_xticks(x_groups + center_offset)
+        ax.set_xticklabels([STRATEGY_DISPLAY[s] for s in strategies])
+        ax.set_ylim(-1.0, 1.0)
+        ax.axhline(y=0, color="black", linestyle="-", alpha=0.4, linewidth=0.8)
+
+        handles, labels = ax.get_legend_handles_labels()
+        seen = {}
+        unique_handles, unique_labels = [], []
+        for h, lbl in zip(handles, labels):
+            if lbl not in seen:
+                seen[lbl] = True
+                unique_handles.append(h)
+                unique_labels.append(lbl)
+        ax.legend(unique_handles, unique_labels, loc="upper right", fontsize=7)
+
+    plt.tight_layout()
+    fig.savefig(
+        output_dir / f"subset_dimension_comparison_mcc.{fmt}",
+        dpi=dpi,
+        bbox_inches="tight",
+    )
+    plt.close()
+    print(f"  Wrote subset_dimension_comparison_mcc.{fmt}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Plot filename-based subset experiment results."
@@ -347,9 +514,14 @@ def main():
     print("Generating plots...")
     plot_f1_by_subset(summaries, output_dir, args.format, args.dpi)
     plot_mcc_by_subset(summaries, output_dir, args.format, args.dpi)
+    if "auc" in summaries.columns:
+        plot_auc_by_subset(summaries, output_dir, args.format, args.dpi)
     if not predictions.empty:
         plot_per_pair_f1(predictions, output_dir, args.format, args.dpi)
+        if "auc" in predictions.columns:
+            plot_per_pair_auc(predictions, output_dir, args.format, args.dpi)
     plot_dimension_comparison(summaries, output_dir, args.format, args.dpi)
+    plot_dimension_comparison_mcc(summaries, output_dir, args.format, args.dpi)
     print("Done.")
 
 

@@ -27,6 +27,8 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
     f1_score,
     matthews_corrcoef,
     precision_score,
@@ -110,32 +112,30 @@ def compute_new_files(train: pd.DataFrame, test: pd.DataFrame) -> set[str]:
 def compute_changed_label(
     train: pd.DataFrame,
     test: pd.DataFrame,
-    train_versions: list[str],
 ) -> set[str]:
     """Find test files present in train but with a different label.
 
-    For cumulative strategies with multiple train versions, compare against
-    the most recent train version of each file.
+    A test file is changed_label if:
+    - Its label differs from ANY train instance with the same path, OR
+    - The file has inconsistent labels across train versions (both clean and buggy).
 
-    Args:
-        train: Training DataFrame.
-        test: Test DataFrame.
-        train_versions: Ordered list of training version strings (earliest to latest).
+    This means files with mixed labels in training are always included,
+    regardless of the test label.
     """
-    # Build map: relative_path -> label from most recent train version
-    # Process versions in order so later versions overwrite earlier ones
-    train_label_by_path: dict[str, str] = {}
-    for ver in train_versions:
-        ver_mask = _version_matches(train["version"], str(ver))
-        for _, row in train[ver_mask].iterrows():
-            rel = extract_relative_path(row["file_path"])
-            train_label_by_path[rel] = row["label"]
+    # Build map: relative_path -> set of all labels seen in training
+    train_labels_by_path: dict[str, set[str]] = {}
+    for _, row in train.iterrows():
+        rel = extract_relative_path(row["file_path"])
+        train_labels_by_path.setdefault(rel, set()).add(row["label"])
 
     changed = set()
     for _, row in test.iterrows():
         rel = extract_relative_path(row["file_path"])
-        if rel in train_label_by_path and row["label"] != train_label_by_path[rel]:
-            changed.add(row["file_path"])
+        if rel in train_labels_by_path:
+            train_labels = train_labels_by_path[rel]
+            # Include if: test label differs from any train label, or train has mixed labels
+            if row["label"] not in train_labels or len(train_labels) > 1:
+                changed.add(row["file_path"])
     return changed
 
 
@@ -147,6 +147,9 @@ def evaluate_subset(clf, X: np.ndarray, y: np.ndarray, subset_name: str) -> dict
     y_pred = clf.predict(X)
     buggy_count = int(np.sum(y == 1))
     clean_count = int(np.sum(y == 0))
+    tp = int(np.sum((y == 1) & (y_pred == 1)))
+    fp = int(np.sum((y == 0) & (y_pred == 1)))
+    fn = int(np.sum((y == 1) & (y_pred == 0)))
 
     metrics = {
         "classifier": "RandomForest",
@@ -156,30 +159,54 @@ def evaluate_subset(clf, X: np.ndarray, y: np.ndarray, subset_name: str) -> dict
         "support_clean": clean_count,
     }
 
+    metrics["accuracy"] = accuracy_score(y, y_pred)
+    metrics["f1_macro"] = f1_score(y, y_pred, average="macro", zero_division=0)
+    metrics["f1_weighted"] = f1_score(y, y_pred, average="weighted", zero_division=0)
+
     if len(np.unique(y)) < 2:
-        metrics["f1_macro"] = f1_score(y, y_pred, average="macro", zero_division=0)
-        metrics["precision_buggy"] = np.nan
-        metrics["recall_buggy"] = np.nan
-        metrics["precision_clean"] = np.nan
-        metrics["recall_clean"] = np.nan
-        metrics["mcc"] = np.nan
-        metrics["auc"] = np.nan
+        nan_metrics = [
+            "precision_buggy",
+            "recall_buggy",
+            "f1_buggy",
+            "precision_clean",
+            "recall_clean",
+            "f1_clean",
+            "far",
+            "csi",
+            "mcc",
+            "auc",
+            "auprc",
+        ]
+        for m in nan_metrics:
+            metrics[m] = np.nan
     else:
-        metrics["f1_macro"] = f1_score(y, y_pred, average="macro", zero_division=0)
+        # Per-class precision, recall, F1
         metrics["precision_buggy"] = precision_score(
             y, y_pred, pos_label=1, zero_division=0
         )
         metrics["recall_buggy"] = recall_score(y, y_pred, pos_label=1, zero_division=0)
+        metrics["f1_buggy"] = f1_score(y, y_pred, pos_label=1, zero_division=0)
         metrics["precision_clean"] = precision_score(
             y, y_pred, pos_label=0, zero_division=0
         )
         metrics["recall_clean"] = recall_score(y, y_pred, pos_label=0, zero_division=0)
+        metrics["f1_clean"] = f1_score(y, y_pred, pos_label=0, zero_division=0)
+
+        # Derived metrics
+        metrics["far"] = 1.0 - metrics["recall_clean"]  # False Alarm Rate
+        csi_denom = tp + fp + fn
+        metrics["csi"] = (
+            tp / csi_denom if csi_denom > 0 else np.nan
+        )  # Critical Success Index
+
         metrics["mcc"] = matthews_corrcoef(y, y_pred)
         try:
             y_proba = clf.predict_proba(X)[:, 1]
             metrics["auc"] = roc_auc_score(y, y_proba)
+            metrics["auprc"] = average_precision_score(y, y_proba)
         except (ValueError, IndexError):
             metrics["auc"] = np.nan
+            metrics["auprc"] = np.nan
 
     return metrics
 
@@ -290,14 +317,6 @@ def get_pair_metadata(metadata: dict, pair_num: int, strategy: str) -> dict:
     return {}
 
 
-def get_train_versions(pair_meta: dict, strategy: str) -> list[str]:
-    """Get ordered list of training version strings for a pair."""
-    if strategy == "pairwise":
-        return [str(pair_meta["version_a"])]
-    # Cumulative: train_versions is already ordered
-    return [str(v) for v in pair_meta.get("train_versions", [pair_meta["version_a"]])]
-
-
 def write_results_csv(results: list[dict], output_path: Path) -> None:
     """Write results to CSV."""
     if not results:
@@ -307,12 +326,19 @@ def write_results_csv(results: list[dict], output_path: Path) -> None:
         "pair",
         "classifier",
         "subset",
+        "accuracy",
         "f1_macro",
+        "f1_weighted",
+        "f1_buggy",
+        "f1_clean",
         "auc",
+        "auprc",
         "precision_buggy",
         "recall_buggy",
         "precision_clean",
         "recall_clean",
+        "far",
+        "csi",
         "mcc",
         "support_buggy",
         "support_clean",
@@ -331,12 +357,19 @@ def write_summary(results: list[dict], output_path: Path) -> None:
         return
     df = pd.DataFrame(results)
     numeric_cols = [
+        "accuracy",
         "f1_macro",
+        "f1_weighted",
+        "f1_buggy",
+        "f1_clean",
         "auc",
+        "auprc",
         "precision_buggy",
         "recall_buggy",
         "precision_clean",
         "recall_clean",
+        "far",
+        "csi",
         "mcc",
     ]
     summary = df.groupby(["classifier", "subset"])[numeric_cols].mean()
@@ -403,9 +436,8 @@ def main():
             print(f"  Pair {pair_num}: empty train or test, skipping")
             continue
 
-        train_versions = get_train_versions(pair_meta, args.strategy)
         new_files = compute_new_files(train, test)
-        changed_label = compute_changed_label(train, test, train_versions)
+        changed_label = compute_changed_label(train, test)
 
         pct_new = len(new_files) / len(test) * 100
         pct_changed = len(changed_label) / len(test) * 100

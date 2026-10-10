@@ -1,4 +1,4 @@
-classifier,subset,f1_macro,auc,precision_buggy,recall_buggy,precision_clean,recall_clean,mcc
-RandomForest,baseline,0.6846,0.9733,0.9023,0.2692,0.9444,0.9972,0.4629
-RandomForest,changed_label,0.3439,0.0043,0.0,0.0,0.6095,0.8929,-0.151
-RandomForest,new_files,0.5842,0.8624,0.0909,0.0053,0.8753,1.0,0.0209
+classifier,subset,accuracy,f1_macro,f1_weighted,f1_buggy,f1_clean,auc,auprc,precision_buggy,recall_buggy,precision_clean,recall_clean,far,csi,mcc
+RandomForest,baseline,0.9433,0.6846,0.9287,0.3991,0.97,0.9733,0.8354,0.9023,0.2692,0.9444,0.9972,0.0028,0.2589,0.4629
+RandomForest,changed_label,0.5569,0.3439,0.4804,0.0,0.6878,0.0043,0.2597,0.0,0.0,0.6095,0.8929,0.1071,0.0,-0.151
+RandomForest,new_files,0.902,0.5842,0.8582,0.0101,0.9316,0.8624,0.6269,0.0909,0.0053,0.8753,1.0,0.0,0.0053,0.0209
