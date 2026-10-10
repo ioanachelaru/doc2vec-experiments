@@ -24,8 +24,8 @@ import pandas as pd
 
 STRATEGY_DISPLAY = {"pairwise": "pairwise", "cumulative-fresh": "cumulative"}
 
-# Primary dimensions: Django=400, Calcite=200
-PRIMARY_DIM = {"django": "400", "calcite": "200"}
+# Primary dimension for both projects
+PRIMARY_DIM = {"django": "200", "calcite": "200"}
 
 SUBSET_COLORS = {
     "baseline": "#2196F3",
