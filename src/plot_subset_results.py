@@ -93,12 +93,13 @@ def load_predictions(pred_dir: Path) -> pd.DataFrame:
 
 
 def plot_f1_by_subset(summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi: int):
-    """Grouped bar chart: F1 for each subset across project x strategy (primary dims)."""
+    """Grouped bar chart: F1 for each subset, full vs cleaned, across project x strategy."""
+    has_cleaned = "train_set" in summaries.columns
     fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
     fig.suptitle("F1 Macro by Evaluation Subset — RandomForest", fontsize=14, y=1.02)
 
     subsets = ["baseline", "new_files", "changed_label"]
-    bar_width = 0.22
+    bar_width = 0.12 if has_cleaned else 0.22
 
     for ax, project in zip(axes, ["django", "calcite"]):
         primary = PRIMARY_DIM[project]
@@ -107,34 +108,59 @@ def plot_f1_by_subset(summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi: 
         ]
 
         strategies = ["pairwise", "cumulative-fresh"]
-        x = np.arange(len(strategies))
+        train_sets = [("full", ""), ("cleaned", "//")] if has_cleaned else [("full", "")]
+        group_width = len(subsets) * len(train_sets) * bar_width + 0.15
+        x_groups = np.arange(len(strategies)) * (group_width + 0.3)
 
-        for i, subset in enumerate(subsets):
-            vals = []
-            for strategy in strategies:
-                row = sub[(sub["strategy"] == strategy) & (sub["subset"] == subset)]
-                vals.append(row["f1_macro"].values[0] if len(row) > 0 else 0)
-            ax.bar(
-                x + i * bar_width,
-                vals,
-                bar_width,
-                label=SUBSET_LABELS[subset],
-                color=SUBSET_COLORS[subset],
-                alpha=0.85,
-            )
+        for si, subset in enumerate(subsets):
+            for ti, (ts, hatch) in enumerate(train_sets):
+                vals = []
+                for strategy in strategies:
+                    row = sub[
+                        (sub["strategy"] == strategy)
+                        & (sub["subset"] == subset)
+                        & (sub.get("train_set", "full") == ts if has_cleaned else True)
+                    ]
+                    if has_cleaned:
+                        row = sub[
+                            (sub["strategy"] == strategy)
+                            & (sub["subset"] == subset)
+                            & (sub["train_set"] == ts)
+                        ]
+                    vals.append(row["f1_macro"].values[0] if len(row) > 0 else 0)
+
+                offset = si * len(train_sets) * bar_width + ti * bar_width
+                ax.bar(
+                    x_groups + offset,
+                    vals,
+                    bar_width,
+                    label=f"{SUBSET_LABELS[subset]} ({ts})" if has_cleaned else SUBSET_LABELS[subset],
+                    color=SUBSET_COLORS[subset],
+                    alpha=0.85 if ti == 0 else 0.5,
+                    hatch=hatch,
+                    edgecolor="white" if not hatch else SUBSET_COLORS[subset],
+                )
 
         ax.set_xlabel("Strategy")
         ax.set_ylabel("F1 Macro" if project == "django" else "")
         ax.set_title(f"{project.title()} (dim {primary})")
-        ax.set_xticks(x + bar_width)
+        center_offset = (len(subsets) * len(train_sets) * bar_width - bar_width) / 2
+        ax.set_xticks(x_groups + center_offset)
         ax.set_xticklabels([STRATEGY_DISPLAY[s] for s in strategies])
         ax.set_ylim(0, 1.0)
         ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.3, linewidth=0.8)
 
     handles, labels = axes[0].get_legend_handles_labels()
+    seen = {}
+    unique_handles, unique_labels = [], []
+    for h, lbl in zip(handles, labels):
+        if lbl not in seen:
+            seen[lbl] = True
+            unique_handles.append(h)
+            unique_labels.append(lbl)
     fig.legend(
-        handles, labels, loc="lower center", ncol=3, fontsize=9,
-        bbox_to_anchor=(0.5, -0.06),
+        unique_handles, unique_labels, loc="lower center", ncol=3, fontsize=8,
+        bbox_to_anchor=(0.5, -0.08),
     )
 
     plt.tight_layout()
@@ -146,7 +172,8 @@ def plot_f1_by_subset(summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi: 
 
 
 def plot_mcc_by_subset(summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi: int):
-    """Grouped bar chart: MCC for each subset — shows negative MCC for changed_label."""
+    """Grouped bar chart: MCC for each subset, full vs cleaned."""
+    has_cleaned = "train_set" in summaries.columns
     fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
     fig.suptitle(
         "Matthews Correlation Coefficient by Evaluation Subset — RandomForest",
@@ -155,7 +182,7 @@ def plot_mcc_by_subset(summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi:
     )
 
     subsets = ["baseline", "new_files", "changed_label"]
-    bar_width = 0.22
+    bar_width = 0.12 if has_cleaned else 0.22
 
     for ax, project in zip(axes, ["django", "calcite"]):
         primary = PRIMARY_DIM[project]
@@ -164,34 +191,59 @@ def plot_mcc_by_subset(summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi:
         ]
 
         strategies = ["pairwise", "cumulative-fresh"]
-        x = np.arange(len(strategies))
+        train_sets = [("full", ""), ("cleaned", "//")] if has_cleaned else [("full", "")]
+        group_width = len(subsets) * len(train_sets) * bar_width + 0.15
+        x_groups = np.arange(len(strategies)) * (group_width + 0.3)
 
-        for i, subset in enumerate(subsets):
-            vals = []
-            for strategy in strategies:
-                row = sub[(sub["strategy"] == strategy) & (sub["subset"] == subset)]
-                vals.append(row["mcc"].values[0] if len(row) > 0 else 0)
-            ax.bar(
-                x + i * bar_width,
-                vals,
-                bar_width,
-                label=SUBSET_LABELS[subset],
-                color=SUBSET_COLORS[subset],
-                alpha=0.85,
-            )
+        for si, subset in enumerate(subsets):
+            for ti, (ts, hatch) in enumerate(train_sets):
+                vals = []
+                for strategy in strategies:
+                    if has_cleaned:
+                        row = sub[
+                            (sub["strategy"] == strategy)
+                            & (sub["subset"] == subset)
+                            & (sub["train_set"] == ts)
+                        ]
+                    else:
+                        row = sub[
+                            (sub["strategy"] == strategy)
+                            & (sub["subset"] == subset)
+                        ]
+                    vals.append(row["mcc"].values[0] if len(row) > 0 else 0)
+
+                offset = si * len(train_sets) * bar_width + ti * bar_width
+                ax.bar(
+                    x_groups + offset,
+                    vals,
+                    bar_width,
+                    label=f"{SUBSET_LABELS[subset]} ({ts})" if has_cleaned else SUBSET_LABELS[subset],
+                    color=SUBSET_COLORS[subset],
+                    alpha=0.85 if ti == 0 else 0.5,
+                    hatch=hatch,
+                    edgecolor="white" if not hatch else SUBSET_COLORS[subset],
+                )
 
         ax.set_xlabel("Strategy")
         ax.set_ylabel("MCC" if project == "django" else "")
         ax.set_title(f"{project.title()} (dim {primary})")
-        ax.set_xticks(x + bar_width)
+        center_offset = (len(subsets) * len(train_sets) * bar_width - bar_width) / 2
+        ax.set_xticks(x_groups + center_offset)
         ax.set_xticklabels([STRATEGY_DISPLAY[s] for s in strategies])
         ax.set_ylim(-1.0, 1.0)
         ax.axhline(y=0, color="black", linestyle="-", alpha=0.4, linewidth=0.8)
 
     handles, labels = axes[0].get_legend_handles_labels()
+    seen = {}
+    unique_handles, unique_labels = [], []
+    for h, lbl in zip(handles, labels):
+        if lbl not in seen:
+            seen[lbl] = True
+            unique_handles.append(h)
+            unique_labels.append(lbl)
     fig.legend(
-        handles, labels, loc="lower center", ncol=3, fontsize=9,
-        bbox_to_anchor=(0.5, -0.06),
+        unique_handles, unique_labels, loc="lower center", ncol=3, fontsize=8,
+        bbox_to_anchor=(0.5, -0.08),
     )
 
     plt.tight_layout()
@@ -260,12 +312,13 @@ def plot_per_pair_f1(predictions: pd.DataFrame, output_dir: Path, fmt: str, dpi:
 
 
 def plot_auc_by_subset(summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi: int):
-    """Grouped bar chart: AUC for each subset across project x strategy (primary dims)."""
+    """Grouped bar chart: AUC for each subset, full vs cleaned."""
+    has_cleaned = "train_set" in summaries.columns
     fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
     fig.suptitle("AUC by Evaluation Subset — RandomForest", fontsize=14, y=1.02)
 
     subsets = ["baseline", "new_files", "changed_label"]
-    bar_width = 0.22
+    bar_width = 0.12 if has_cleaned else 0.22
 
     for ax, project in zip(axes, ["django", "calcite"]):
         primary = PRIMARY_DIM[project]
@@ -274,34 +327,59 @@ def plot_auc_by_subset(summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi:
         ]
 
         strategies = ["pairwise", "cumulative-fresh"]
-        x = np.arange(len(strategies))
+        train_sets = [("full", ""), ("cleaned", "//")] if has_cleaned else [("full", "")]
+        group_width = len(subsets) * len(train_sets) * bar_width + 0.15
+        x_groups = np.arange(len(strategies)) * (group_width + 0.3)
 
-        for i, subset in enumerate(subsets):
-            vals = []
-            for strategy in strategies:
-                row = sub[(sub["strategy"] == strategy) & (sub["subset"] == subset)]
-                vals.append(row["auc"].values[0] if len(row) > 0 else 0)
-            ax.bar(
-                x + i * bar_width,
-                vals,
-                bar_width,
-                label=SUBSET_LABELS[subset],
-                color=SUBSET_COLORS[subset],
-                alpha=0.85,
-            )
+        for si, subset in enumerate(subsets):
+            for ti, (ts, hatch) in enumerate(train_sets):
+                vals = []
+                for strategy in strategies:
+                    if has_cleaned:
+                        row = sub[
+                            (sub["strategy"] == strategy)
+                            & (sub["subset"] == subset)
+                            & (sub["train_set"] == ts)
+                        ]
+                    else:
+                        row = sub[
+                            (sub["strategy"] == strategy)
+                            & (sub["subset"] == subset)
+                        ]
+                    vals.append(row["auc"].values[0] if len(row) > 0 else 0)
+
+                offset = si * len(train_sets) * bar_width + ti * bar_width
+                ax.bar(
+                    x_groups + offset,
+                    vals,
+                    bar_width,
+                    label=f"{SUBSET_LABELS[subset]} ({ts})" if has_cleaned else SUBSET_LABELS[subset],
+                    color=SUBSET_COLORS[subset],
+                    alpha=0.85 if ti == 0 else 0.5,
+                    hatch=hatch,
+                    edgecolor="white" if not hatch else SUBSET_COLORS[subset],
+                )
 
         ax.set_xlabel("Strategy")
         ax.set_ylabel("AUC" if project == "django" else "")
         ax.set_title(f"{project.title()} (dim {primary})")
-        ax.set_xticks(x + bar_width)
+        center_offset = (len(subsets) * len(train_sets) * bar_width - bar_width) / 2
+        ax.set_xticks(x_groups + center_offset)
         ax.set_xticklabels([STRATEGY_DISPLAY[s] for s in strategies])
         ax.set_ylim(0, 1.0)
         ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.3, linewidth=0.8)
 
     handles, labels = axes[0].get_legend_handles_labels()
+    seen = {}
+    unique_handles, unique_labels = [], []
+    for h, lbl in zip(handles, labels):
+        if lbl not in seen:
+            seen[lbl] = True
+            unique_handles.append(h)
+            unique_labels.append(lbl)
     fig.legend(
-        handles, labels, loc="lower center", ncol=3, fontsize=9,
-        bbox_to_anchor=(0.5, -0.06),
+        unique_handles, unique_labels, loc="lower center", ncol=3, fontsize=8,
+        bbox_to_anchor=(0.5, -0.08),
     )
 
     plt.tight_layout()
@@ -512,88 +590,6 @@ def plot_dimension_comparison_mcc(
     print(f"  Wrote subset_dimension_comparison_mcc.{fmt}")
 
 
-def plot_cleaned_train_mcc(
-    summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi: int
-):
-    """Compare MCC between full and cleaned train sets (primary dim only)."""
-    if "train_set" not in summaries.columns:
-        return
-
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
-    fig.suptitle(
-        "MCC: Full vs Cleaned Train — RandomForest (dim 200)", fontsize=14, y=1.02
-    )
-
-    subsets = ["baseline", "new_files", "changed_label"]
-    bar_width = 0.12
-
-    for ax, project in zip(axes, ["django", "calcite"]):
-        primary = PRIMARY_DIM[project]
-        sub = summaries[
-            (summaries["project"] == project) & (summaries["dim"] == primary)
-        ]
-
-        strategies = ["pairwise", "cumulative-fresh"]
-        group_width = len(subsets) * 2 * bar_width + 0.15
-        x_groups = np.arange(len(strategies)) * (group_width + 0.3)
-
-        for si, subset in enumerate(subsets):
-            for ti, (ts, hatch) in enumerate([("full", ""), ("cleaned", "//")]):
-                vals = []
-                for strategy in strategies:
-                    row = sub[
-                        (sub["strategy"] == strategy)
-                        & (sub["subset"] == subset)
-                        & (sub["train_set"] == ts)
-                    ]
-                    vals.append(row["mcc"].values[0] if len(row) > 0 else 0)
-
-                offset = si * 2 * bar_width + ti * bar_width
-                ax.bar(
-                    x_groups + offset,
-                    vals,
-                    bar_width,
-                    label=f"{SUBSET_LABELS[subset]} ({ts})",
-                    color=SUBSET_COLORS[subset],
-                    alpha=0.85 if ti == 0 else 0.5,
-                    hatch=hatch,
-                    edgecolor="white" if not hatch else SUBSET_COLORS[subset],
-                )
-
-        ax.set_xlabel("Strategy")
-        ax.set_ylabel("MCC" if project == "django" else "")
-        ax.set_title(f"{project.title()}")
-        center_offset = (len(subsets) * 2 * bar_width - bar_width) / 2
-        ax.set_xticks(x_groups + center_offset)
-        ax.set_xticklabels([STRATEGY_DISPLAY[s] for s in strategies])
-        ax.set_ylim(-1.0, 1.0)
-        ax.axhline(y=0, color="black", linestyle="-", alpha=0.4, linewidth=0.8)
-
-    # Single shared legend below the figure
-    handles, labels = axes[0].get_legend_handles_labels()
-    seen = {}
-    unique_handles, unique_labels = [], []
-    for h, lbl in zip(handles, labels):
-        if lbl not in seen:
-            seen[lbl] = True
-            unique_handles.append(h)
-            unique_labels.append(lbl)
-    fig.legend(
-        unique_handles,
-        unique_labels,
-        loc="lower center",
-        ncol=3,
-        fontsize=8,
-        bbox_to_anchor=(0.5, -0.08),
-    )
-
-    plt.tight_layout()
-    fig.savefig(
-        output_dir / f"subset_cleaned_train_mcc.{fmt}", dpi=dpi, bbox_inches="tight"
-    )
-    plt.close()
-    print(f"  Wrote subset_cleaned_train_mcc.{fmt}")
-
 
 def _filter_full_train(df: pd.DataFrame) -> pd.DataFrame:
     """Filter to full train set only (for backwards-compatible plots)."""
@@ -638,10 +634,10 @@ def main():
     )
 
     print("Generating plots...")
-    plot_f1_by_subset(summaries_full, output_dir, args.format, args.dpi)
-    plot_mcc_by_subset(summaries_full, output_dir, args.format, args.dpi)
-    if "auc" in summaries_full.columns:
-        plot_auc_by_subset(summaries_full, output_dir, args.format, args.dpi)
+    plot_f1_by_subset(summaries, output_dir, args.format, args.dpi)
+    plot_mcc_by_subset(summaries, output_dir, args.format, args.dpi)
+    if "auc" in summaries.columns:
+        plot_auc_by_subset(summaries, output_dir, args.format, args.dpi)
     if not predictions_full.empty:
         plot_per_pair_f1(predictions_full, output_dir, args.format, args.dpi)
         if "auc" in predictions_full.columns:
@@ -649,8 +645,6 @@ def main():
     plot_dimension_comparison(summaries_full, output_dir, args.format, args.dpi)
     plot_dimension_comparison_mcc(summaries_full, output_dir, args.format, args.dpi)
 
-    # Full vs cleaned comparison (uses both train sets)
-    plot_cleaned_train_mcc(summaries, output_dir, args.format, args.dpi)
     print("Done.")
 
 

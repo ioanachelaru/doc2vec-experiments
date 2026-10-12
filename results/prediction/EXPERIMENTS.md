@@ -215,7 +215,6 @@ All plots in `results/plots/`:
 | `subset_per_pair_auc.png` | AUC per version pair for each subset (4 panels) |
 | `subset_dimension_comparison.png` | F1 macro: dim 200 vs 400 (sensitivity analysis) |
 | `subset_dimension_comparison_mcc.png` | MCC: dim 200 vs 400 (sensitivity analysis) |
-| `subset_cleaned_train_mcc.png` | MCC: full vs cleaned train comparison |
 
 ## Output Files
 
