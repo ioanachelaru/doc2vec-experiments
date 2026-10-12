@@ -1,0 +1,201 @@
+name: Prediction Experiments
+
+on:
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: 'Number of random seeds for RF'
+        required: false
+        default: '10'
+        type: string
+
+# ──────────────────────────────────────────────────────────────
+# Runs predict_with_leakage.py for all 8 configs in parallel:
+#   2 projects × 2 strategies × 2 dims
+# Downloads embedding artifacts from prior embedding-strategies
+# runs, trains RF with multi-seed + cleaned-train variant.
+# ──────────────────────────────────────────────────────────────
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Django pairwise dim200 — new-format artifact
+          - project: django
+            strategy: pairwise
+            vector_size: '200'
+            embedding_run_id: '37302006634'
+            artifact_name: pairwise-django-dim200
+
+          # Django pairwise dim400 — old-format artifact (no dim in name)
+          - project: django
+            strategy: pairwise
+            vector_size: '400'
+            embedding_run_id: '36435916600'
+            artifact_name: pairwise-django
+
+          # Django cumulative-fresh dim200 — new-format artifact
+          - project: django
+            strategy: cumulative-fresh
+            vector_size: '200'
+            embedding_run_id: '37302006634'
+            artifact_name: cumulative-fresh-django-dim200
+
+          # Django cumulative-fresh dim400 — old-format artifact
+          - project: django
+            strategy: cumulative-fresh
+            vector_size: '400'
+            embedding_run_id: '36702999931'
+            artifact_name: cumulative-fresh-django
+
+          # Calcite pairwise dim200 — old-format artifact
+          - project: calcite
+            strategy: pairwise
+            vector_size: '200'
+            embedding_run_id: '36436651515'
+            artifact_name: pairwise-calcite
+
+          # Calcite pairwise dim400 — new-format artifact
+          - project: calcite
+            strategy: pairwise
+            vector_size: '400'
+            embedding_run_id: '37302039751'
+            artifact_name: pairwise-calcite-dim400
+
+          # Calcite cumulative-fresh dim200 — old-format artifact
+          - project: calcite
+            strategy: cumulative-fresh
+            vector_size: '200'
+            embedding_run_id: '36529018897'
+            artifact_name: cumulative-fresh-calcite
+
+          # Calcite cumulative-fresh dim400 — new-format artifact
+          - project: calcite
+            strategy: cumulative-fresh
+            vector_size: '400'
+            embedding_run_id: '37302039751'
+            artifact_name: cumulative-fresh-calcite-dim400
+
+    name: ${{ matrix.project }} ${{ matrix.strategy }} dim${{ matrix.vector_size }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download embedding artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # predict_with_leakage.py looks in results/{strategy}-{project}-{dim_suffix}/
+          SUBDIR="results/${{ matrix.strategy }}-${{ matrix.project }}-${{ matrix.vector_size }}"
+          mkdir -p "$SUBDIR"
+
+          gh run download ${{ matrix.embedding_run_id }} \
+            -R ${{ github.repository }} \
+            -n "${{ matrix.artifact_name }}" \
+            -D "$SUBDIR"
+
+          echo "Downloaded embeddings into $SUBDIR:"
+          ls "$SUBDIR/"*_embeddings.csv 2>/dev/null | wc -l
+          echo "Metadata files:"
+          ls "$SUBDIR/"*_metadata*.json 2>/dev/null
+
+          EMB_COUNT=$(ls "$SUBDIR/"*_embeddings.csv 2>/dev/null | wc -l)
+          if [ "$EMB_COUNT" -eq 0 ]; then
+            echo "::error::No embedding files found in artifact ${{ matrix.artifact_name }}"
+            exit 1
+          fi
+
+      - name: Setup swap space
+        run: |
+          sudo fallocate -l 4G /swapfile2
+          sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2
+          sudo swapon /swapfile2
+
+      - name: Run prediction experiments
+        run: |
+          echo "Config: ${{ matrix.project }} ${{ matrix.strategy }} dim${{ matrix.vector_size }} (${{ inputs.seeds }} seeds)"
+          free -h
+
+          python -u src/predict_with_leakage.py \
+            --project ${{ matrix.project }} \
+            --strategy ${{ matrix.strategy }} \
+            --dim-suffix ${{ matrix.vector_size }} \
+            --seeds ${{ inputs.seeds }} \
+            --results-dir results \
+            --output results/prediction
+
+      - name: Write Job Summary
+        if: always()
+        run: |
+          PROJECT="${{ matrix.project }}"
+          STRATEGY="${{ matrix.strategy }}"
+          VECSIZE="${{ matrix.vector_size }}"
+          SEEDS="${{ inputs.seeds }}"
+          SUMMARY_FILE="results/prediction/${PROJECT}_${STRATEGY}_dim${VECSIZE}_summary.csv"
+
+          if [ -f "$SUMMARY_FILE" ]; then
+            python3 << PYEOF
+          import pandas as pd
+
+          project = "${PROJECT}"
+          strategy = "${STRATEGY}"
+          vecsize = "${VECSIZE}"
+          seeds = "${SEEDS}"
+
+          summary = pd.read_csv("${SUMMARY_FILE}")
+
+          with open("summary_report.md", "w") as f:
+              f.write(f"# Prediction: {project} {strategy} dim{vecsize}\n\n")
+              f.write(f"**Seeds:** {seeds} | ")
+              f.write(f"**Classifier:** RandomForest(500, balanced)\n\n")
+
+              for train_set in ["full", "cleaned"]:
+                  ts = summary[summary["train_set"] == train_set]
+                  if len(ts) == 0:
+                      continue
+                  f.write(f"### Train set: {train_set}\n\n")
+                  f.write("| Subset | Accuracy | F1 macro | AUC | AUPRC | MCC | Prec buggy | Rec buggy | FAR | CSI |\n")
+                  f.write("|---|---|---|---|---|---|---|---|---|---|\n")
+                  for _, row in ts.iterrows():
+                      f.write(f"| {row['subset']} | {row['accuracy']:.4f} | {row['f1_macro']:.4f} | {row['auc']:.4f} | {row['auprc']:.4f} | {row['mcc']:.4f} | {row['precision_buggy']:.4f} | {row['recall_buggy']:.4f} | {row['far']:.4f} | {row['csi']:.4f} |\n")
+                  f.write("\n")
+
+          PYEOF
+            cat summary_report.md >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## Prediction Experiments" >> $GITHUB_STEP_SUMMARY
+            echo "Experiment did not complete. Check logs." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload prediction results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-${{ matrix.project }}-${{ matrix.strategy }}-dim${{ matrix.vector_size }}
+          path: |
+            results/prediction/${{ matrix.project }}_${{ matrix.strategy }}_dim${{ matrix.vector_size }}_*
+          retention-days: 90

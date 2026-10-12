@@ -1,4 +1,7 @@
-classifier,subset,accuracy,f1_macro,f1_weighted,f1_buggy,f1_clean,auc,auprc,precision_buggy,recall_buggy,precision_clean,recall_clean,far,csi,mcc
-RandomForest,baseline,0.9433,0.6846,0.9287,0.3991,0.97,0.9733,0.8354,0.9023,0.2692,0.9444,0.9972,0.0028,0.2589,0.4629
-RandomForest,changed_label,0.5569,0.3439,0.4804,0.0,0.6878,0.0043,0.2597,0.0,0.0,0.6095,0.8929,0.1071,0.0,-0.151
-RandomForest,new_files,0.902,0.5842,0.8582,0.0101,0.9316,0.8624,0.6269,0.0909,0.0053,0.8753,1.0,0.0,0.0053,0.0209
+classifier,train_set,subset,accuracy,f1_macro,f1_weighted,f1_buggy,f1_clean,auc,auprc,precision_buggy,recall_buggy,precision_clean,recall_clean,far,csi,mcc
+RandomForest,cleaned,baseline,0.9259,0.5126,0.8937,0.064,0.9612,0.8999,0.5134,0.6944,0.0362,0.9264,0.9991,0.0009,0.035,0.1311
+RandomForest,cleaned,changed_label,0.6115,0.3652,0.5089,0.0,0.7304,0.0549,0.2666,0.0,0.0,0.6272,0.9771,0.0229,0.0,-0.0335
+RandomForest,cleaned,new_files,0.9016,0.5802,0.8571,0.0,0.9313,0.815,0.5661,0.0,0.0,0.8747,1.0,0.0,0.0,0.0
+RandomForest,full,baseline,0.9434,0.6859,0.9288,0.4019,0.97,0.9721,0.8354,0.9063,0.2701,0.9444,0.9973,0.0027,0.2601,0.4659
+RandomForest,full,changed_label,0.5598,0.3446,0.4821,0.0,0.6893,0.0042,0.2612,0.0,0.0,0.6097,0.8937,0.1063,0.0,-0.1529
+RandomForest,full,new_files,0.902,0.5842,0.8582,0.0101,0.9316,0.8387,0.5974,0.0909,0.0053,0.8753,1.0,0.0,0.0053,0.0209

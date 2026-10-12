@@ -482,6 +482,88 @@ def plot_dimension_comparison_mcc(
     print(f"  Wrote subset_dimension_comparison_mcc.{fmt}")
 
 
+def plot_cleaned_train_mcc(
+    summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi: int
+):
+    """Compare MCC between full and cleaned train sets (primary dim only)."""
+    if "train_set" not in summaries.columns:
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
+    fig.suptitle(
+        "MCC: Full vs Cleaned Train — RandomForest (dim 200)", fontsize=14, y=1.02
+    )
+
+    subsets = ["baseline", "new_files", "changed_label"]
+    bar_width = 0.12
+
+    for ax, project in zip(axes, ["django", "calcite"]):
+        primary = PRIMARY_DIM[project]
+        sub = summaries[
+            (summaries["project"] == project) & (summaries["dim"] == primary)
+        ]
+
+        strategies = ["pairwise", "cumulative-fresh"]
+        group_width = len(subsets) * 2 * bar_width + 0.15
+        x_groups = np.arange(len(strategies)) * (group_width + 0.3)
+
+        for si, subset in enumerate(subsets):
+            for ti, (ts, hatch) in enumerate([("full", ""), ("cleaned", "//")]):
+                vals = []
+                for strategy in strategies:
+                    row = sub[
+                        (sub["strategy"] == strategy)
+                        & (sub["subset"] == subset)
+                        & (sub["train_set"] == ts)
+                    ]
+                    vals.append(row["mcc"].values[0] if len(row) > 0 else 0)
+
+                offset = si * 2 * bar_width + ti * bar_width
+                ax.bar(
+                    x_groups + offset,
+                    vals,
+                    bar_width,
+                    label=f"{SUBSET_LABELS[subset]} ({ts})",
+                    color=SUBSET_COLORS[subset],
+                    alpha=0.85 if ti == 0 else 0.5,
+                    hatch=hatch,
+                    edgecolor="white" if not hatch else SUBSET_COLORS[subset],
+                )
+
+        ax.set_xlabel("Strategy")
+        ax.set_ylabel("MCC" if project == "django" else "")
+        ax.set_title(f"{project.title()}")
+        center_offset = (len(subsets) * 2 * bar_width - bar_width) / 2
+        ax.set_xticks(x_groups + center_offset)
+        ax.set_xticklabels([STRATEGY_DISPLAY[s] for s in strategies])
+        ax.set_ylim(-1.0, 1.0)
+        ax.axhline(y=0, color="black", linestyle="-", alpha=0.4, linewidth=0.8)
+
+        handles, labels = ax.get_legend_handles_labels()
+        seen = {}
+        unique_handles, unique_labels = [], []
+        for h, lbl in zip(handles, labels):
+            if lbl not in seen:
+                seen[lbl] = True
+                unique_handles.append(h)
+                unique_labels.append(lbl)
+        ax.legend(unique_handles, unique_labels, loc="upper right", fontsize=7)
+
+    plt.tight_layout()
+    fig.savefig(
+        output_dir / f"subset_cleaned_train_mcc.{fmt}", dpi=dpi, bbox_inches="tight"
+    )
+    plt.close()
+    print(f"  Wrote subset_cleaned_train_mcc.{fmt}")
+
+
+def _filter_full_train(df: pd.DataFrame) -> pd.DataFrame:
+    """Filter to full train set only (for backwards-compatible plots)."""
+    if "train_set" in df.columns:
+        return df[df["train_set"] == "full"].copy()
+    return df
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Plot filename-based subset experiment results."
@@ -511,17 +593,26 @@ def main():
         print("No new-format summary files found")
         return
 
+    # Existing plots use full train only
+    summaries_full = _filter_full_train(summaries)
+    predictions_full = (
+        _filter_full_train(predictions) if not predictions.empty else predictions
+    )
+
     print("Generating plots...")
-    plot_f1_by_subset(summaries, output_dir, args.format, args.dpi)
-    plot_mcc_by_subset(summaries, output_dir, args.format, args.dpi)
-    if "auc" in summaries.columns:
-        plot_auc_by_subset(summaries, output_dir, args.format, args.dpi)
-    if not predictions.empty:
-        plot_per_pair_f1(predictions, output_dir, args.format, args.dpi)
-        if "auc" in predictions.columns:
-            plot_per_pair_auc(predictions, output_dir, args.format, args.dpi)
-    plot_dimension_comparison(summaries, output_dir, args.format, args.dpi)
-    plot_dimension_comparison_mcc(summaries, output_dir, args.format, args.dpi)
+    plot_f1_by_subset(summaries_full, output_dir, args.format, args.dpi)
+    plot_mcc_by_subset(summaries_full, output_dir, args.format, args.dpi)
+    if "auc" in summaries_full.columns:
+        plot_auc_by_subset(summaries_full, output_dir, args.format, args.dpi)
+    if not predictions_full.empty:
+        plot_per_pair_f1(predictions_full, output_dir, args.format, args.dpi)
+        if "auc" in predictions_full.columns:
+            plot_per_pair_auc(predictions_full, output_dir, args.format, args.dpi)
+    plot_dimension_comparison(summaries_full, output_dir, args.format, args.dpi)
+    plot_dimension_comparison_mcc(summaries_full, output_dir, args.format, args.dpi)
+
+    # Full vs cleaned comparison (uses both train sets)
+    plot_cleaned_train_mcc(summaries, output_dir, args.format, args.dpi)
     print("Done.")
 
 

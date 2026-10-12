@@ -35,6 +35,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 def load_embeddings(csv_path: Path) -> pd.DataFrame:
@@ -211,6 +212,14 @@ def evaluate_subset(clf, X: np.ndarray, y: np.ndarray, subset_name: str) -> dict
     return metrics
 
 
+def compute_leaked_train_mask(
+    X_train: np.ndarray, X_test: np.ndarray, threshold: float = 0.99
+) -> np.ndarray:
+    """Return boolean mask of train instances with cosine similarity >= threshold to any test instance."""
+    sim_matrix = np.clip(cosine_similarity(X_train, X_test), -1.0, 1.0)
+    return sim_matrix.max(axis=1) >= threshold
+
+
 def run_pair(
     pair: int,
     train: pd.DataFrame,
@@ -218,16 +227,17 @@ def run_pair(
     dim_cols: list[str],
     new_file_paths: set[str],
     changed_label_paths: set[str],
+    n_seeds: int = 10,
 ) -> list[dict]:
-    """Run classification for one pair, return list of metric dicts."""
-    X_train = train[dim_cols].values.astype(np.float64)
-    y_train = (train["label"] == "buggy").astype(int).values
+    """Run classification for one pair with multiple seeds and cleaned-train variant."""
+    X_train_full = train[dim_cols].values.astype(np.float64)
+    y_train_full = (train["label"] == "buggy").astype(int).values
 
-    if len(np.unique(y_train)) < 2:
+    if len(np.unique(y_train_full)) < 2:
         print(f"  Pair {pair}: skipping — single class in train")
         return []
 
-    # Build subsets
+    # Build test subsets
     new_mask = test["file_path"].isin(new_file_paths)
     changed_mask = test["file_path"].isin(changed_label_paths)
 
@@ -237,19 +247,58 @@ def run_pair(
         "changed_label": test[changed_mask],
     }
 
-    clf = RandomForestClassifier(
-        n_estimators=500, class_weight="balanced", random_state=42, n_jobs=-1
-    )
-    clf.fit(X_train, y_train)
+    # Compute cleaned train set (remove instances with cosine >= 0.99 to any test)
+    X_test_all = test[dim_cols].values.astype(np.float64)
+    leaked_mask = compute_leaked_train_mask(X_train_full, X_test_all)
+    n_leaked = int(leaked_mask.sum())
 
+    X_train_clean = X_train_full[~leaked_mask]
+    y_train_clean = y_train_full[~leaked_mask]
+    clean_viable = len(X_train_clean) > 0 and len(np.unique(y_train_clean)) >= 2
+
+    print(
+        f"    leaked_train={n_leaked} ({n_leaked / len(X_train_full) * 100:.1f}%), "
+        f"cleaned_train={len(X_train_clean)}"
+    )
+
+    seeds = list(range(42, 42 + n_seeds))
     results = []
-    for subset_name, subset_df in subsets.items():
-        X_sub = subset_df[dim_cols].values.astype(np.float64)
-        y_sub = (subset_df["label"] == "buggy").astype(int).values
-        m = evaluate_subset(clf, X_sub, y_sub, subset_name)
-        if m is not None:
-            m["pair"] = pair
-            results.append(m)
+
+    for seed in seeds:
+        # Full train
+        clf_full = RandomForestClassifier(
+            n_estimators=500, class_weight="balanced", random_state=seed, n_jobs=-1
+        )
+        clf_full.fit(X_train_full, y_train_full)
+
+        for subset_name, subset_df in subsets.items():
+            X_sub = subset_df[dim_cols].values.astype(np.float64)
+            y_sub = (subset_df["label"] == "buggy").astype(int).values
+            m = evaluate_subset(clf_full, X_sub, y_sub, subset_name)
+            if m is not None:
+                m["pair"] = pair
+                m["seed"] = seed
+                m["train_set"] = "full"
+                m["n_leaked_train"] = n_leaked
+                results.append(m)
+
+        # Cleaned train
+        if clean_viable:
+            clf_clean = RandomForestClassifier(
+                n_estimators=500, class_weight="balanced", random_state=seed, n_jobs=-1
+            )
+            clf_clean.fit(X_train_clean, y_train_clean)
+
+            for subset_name, subset_df in subsets.items():
+                X_sub = subset_df[dim_cols].values.astype(np.float64)
+                y_sub = (subset_df["label"] == "buggy").astype(int).values
+                m = evaluate_subset(clf_clean, X_sub, y_sub, subset_name)
+                if m is not None:
+                    m["pair"] = pair
+                    m["seed"] = seed
+                    m["train_set"] = "cleaned"
+                    m["n_leaked_train"] = n_leaked
+                    results.append(m)
 
     return results
 
@@ -324,6 +373,8 @@ def write_results_csv(results: list[dict], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "pair",
+        "seed",
+        "train_set",
         "classifier",
         "subset",
         "accuracy",
@@ -340,6 +391,7 @@ def write_results_csv(results: list[dict], output_path: Path) -> None:
         "far",
         "csi",
         "mcc",
+        "n_leaked_train",
         "support_buggy",
         "support_clean",
         "total",
@@ -372,7 +424,7 @@ def write_summary(results: list[dict], output_path: Path) -> None:
         "csi",
         "mcc",
     ]
-    summary = df.groupby(["classifier", "subset"])[numeric_cols].mean()
+    summary = df.groupby(["classifier", "train_set", "subset"])[numeric_cols].mean()
     summary = summary.round(4)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     summary.to_csv(output_path)
@@ -398,6 +450,12 @@ def main():
         type=str,
         default="",
         help="Suffix for alternate dimension directories (e.g., '200' for pairwise-django-200)",
+    )
+    parser.add_argument(
+        "--seeds",
+        type=int,
+        default=10,
+        help="Number of random seeds for RF (default 10)",
     )
     args = parser.parse_args()
 
@@ -448,7 +506,7 @@ def main():
         )
 
         pair_results = run_pair(
-            pair_num, train, test, dim_cols, new_files, changed_label
+            pair_num, train, test, dim_cols, new_files, changed_label, args.seeds
         )
         all_results.extend(pair_results)
 
@@ -462,18 +520,27 @@ def main():
     if all_results:
         df_res = pd.DataFrame(all_results)
         print(f"\n{'=' * 80}")
-        print(f"SUMMARY: {args.project} {args.strategy}")
+        print(f"SUMMARY: {args.project} {args.strategy} ({args.seeds} seeds)")
         print(f"{'=' * 80}\n")
-        for subset in ["baseline", "new_files", "changed_label"]:
-            s = df_res[df_res["subset"] == subset]
-            if len(s) > 0:
-                f1 = s["f1_macro"].mean()
-                auc = s["auc"].mean()
-                mcc = s["mcc"].mean()
-                n = s["total"].mean()
-                print(
-                    f"  {subset:<16} F1={f1:.4f}  AUC={auc:.4f}  MCC={mcc:.4f}  avg_n={n:.0f}"
-                )
+        for train_set in ["full", "cleaned"]:
+            ts = df_res[df_res["train_set"] == train_set]
+            if len(ts) == 0:
+                continue
+            print(f"  [{train_set} train]")
+            for subset in ["baseline", "new_files", "changed_label"]:
+                s = ts[ts["subset"] == subset]
+                if len(s) > 0:
+                    f1 = s["f1_macro"].mean()
+                    auc = s["auc"].mean()
+                    mcc = s["mcc"].mean()
+                    n = s["total"].mean()
+                    print(
+                        f"    {subset:<16} F1={f1:.4f}  AUC={auc:.4f}  MCC={mcc:.4f}  avg_n={n:.0f}"
+                    )
+            if train_set == "full":
+                leaked = ts["n_leaked_train"].iloc[0] if len(ts) > 0 else 0
+                print(f"    (leaked train instances removed: {leaked})")
+            print()
 
 
 if __name__ == "__main__":
