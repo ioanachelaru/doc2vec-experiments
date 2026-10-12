@@ -1,7 +1,7 @@
-leakage_method,classifier,subset,f1_macro,auc,precision_buggy,recall_buggy,precision_clean,recall_clean,mcc
-embedding_0.99,LogisticRegression,baseline,0.8556,0.9071,0.7881,0.8462,0.9154,0.8982,0.7203
-embedding_0.99,LogisticRegression,cleaned,0.8338,0.8964,0.7504,0.824,0.905,0.884,0.678
-embedding_0.99,LogisticRegression,leaked-only,0.9195,0.9376,0.8907,0.9029,0.9578,0.9564,0.8483
-embedding_0.99,RandomForest,baseline,0.8478,0.9403,0.8584,0.7414,0.8962,0.9483,0.7146
-embedding_0.99,RandomForest,cleaned,0.8145,0.9341,0.834,0.6675,0.88,0.946,0.654
-embedding_0.99,RandomForest,leaked-only,0.9228,0.9606,0.9033,0.8908,0.959,0.9657,0.8543
+classifier,train_set,subset,accuracy,f1_macro,f1_weighted,f1_buggy,f1_clean,auc,auprc,precision_buggy,recall_buggy,precision_clean,recall_clean,far,csi,mcc
+RandomForest,cleaned,baseline,0.8316,0.7597,0.8217,0.6493,0.8701,0.8968,0.7721,0.7674,0.6155,0.8618,0.8878,0.1122,0.5022,0.5536
+RandomForest,cleaned,changed_label,0.281,0.2223,0.3214,0.1011,0.3673,0.1392,0.1559,0.0726,0.1839,0.5259,0.2973,0.7027,0.0571,-0.4513
+RandomForest,cleaned,new_files,0.6298,0.5042,0.5652,0.2824,0.7261,0.8213,0.7685,0.354,0.2759,0.6645,0.8722,0.1278,0.2105,0.1687
+RandomForest,full,baseline,0.8919,0.8493,0.8864,0.7787,0.9199,0.9405,0.86,0.8616,0.7444,0.8964,0.9486,0.0514,0.661,0.7178
+RandomForest,full,changed_label,0.1847,0.1475,0.2353,0.0123,0.3083,0.0528,0.147,0.0103,0.0154,0.4447,0.2434,0.7566,0.0065,-0.6298
+RandomForest,full,new_files,0.6345,0.5052,0.5682,0.2721,0.7382,0.8204,0.7704,0.3855,0.2452,0.6593,0.9036,0.0964,0.2023,0.1751

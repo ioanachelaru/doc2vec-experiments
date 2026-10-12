@@ -130,7 +130,12 @@ def plot_f1_by_subset(summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi: 
         ax.set_xticklabels([STRATEGY_DISPLAY[s] for s in strategies])
         ax.set_ylim(0, 1.0)
         ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.3, linewidth=0.8)
-        ax.legend(loc="upper right", fontsize=9)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles, labels, loc="lower center", ncol=3, fontsize=9,
+        bbox_to_anchor=(0.5, -0.06),
+    )
 
     plt.tight_layout()
     fig.savefig(
@@ -182,7 +187,12 @@ def plot_mcc_by_subset(summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi:
         ax.set_xticklabels([STRATEGY_DISPLAY[s] for s in strategies])
         ax.set_ylim(-1.0, 1.0)
         ax.axhline(y=0, color="black", linestyle="-", alpha=0.4, linewidth=0.8)
-        ax.legend(loc="upper right", fontsize=9)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles, labels, loc="lower center", ncol=3, fontsize=9,
+        bbox_to_anchor=(0.5, -0.06),
+    )
 
     plt.tight_layout()
     fig.savefig(
@@ -236,7 +246,12 @@ def plot_per_pair_f1(predictions: pd.DataFrame, output_dir: Path, fmt: str, dpi:
         ax.set_ylabel("F1 Macro")
         ax.set_ylim(-0.05, 1.05)
         ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.3, linewidth=0.8)
-        ax.legend(loc="lower left", fontsize=8)
+
+    handles, labels = axes.flat[0].get_legend_handles_labels()
+    fig.legend(
+        handles, labels, loc="lower center", ncol=3, fontsize=9,
+        bbox_to_anchor=(0.5, -0.04),
+    )
 
     plt.tight_layout()
     fig.savefig(output_dir / f"subset_per_pair_f1.{fmt}", dpi=dpi, bbox_inches="tight")
@@ -282,7 +297,12 @@ def plot_auc_by_subset(summaries: pd.DataFrame, output_dir: Path, fmt: str, dpi:
         ax.set_xticklabels([STRATEGY_DISPLAY[s] for s in strategies])
         ax.set_ylim(0, 1.0)
         ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.3, linewidth=0.8)
-        ax.legend(loc="upper right", fontsize=9)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles, labels, loc="lower center", ncol=3, fontsize=9,
+        bbox_to_anchor=(0.5, -0.06),
+    )
 
     plt.tight_layout()
     fig.savefig(
@@ -334,7 +354,12 @@ def plot_per_pair_auc(predictions: pd.DataFrame, output_dir: Path, fmt: str, dpi
         ax.set_ylabel("AUC")
         ax.set_ylim(-0.05, 1.05)
         ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.3, linewidth=0.8)
-        ax.legend(loc="lower left", fontsize=8)
+
+    handles, labels = axes.flat[0].get_legend_handles_labels()
+    fig.legend(
+        handles, labels, loc="lower center", ncol=3, fontsize=9,
+        bbox_to_anchor=(0.5, -0.04),
+    )
 
     plt.tight_layout()
     fig.savefig(output_dir / f"subset_per_pair_auc.{fmt}", dpi=dpi, bbox_inches="tight")
@@ -392,16 +417,18 @@ def plot_dimension_comparison(
         ax.set_ylim(0, 1.0)
         ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.3, linewidth=0.8)
 
-        # Deduplicate legend
-        handles, labels = ax.get_legend_handles_labels()
-        seen = {}
-        unique_handles, unique_labels = [], []
-        for h, lbl in zip(handles, labels):
-            if lbl not in seen:
-                seen[lbl] = True
-                unique_handles.append(h)
-                unique_labels.append(lbl)
-        ax.legend(unique_handles, unique_labels, loc="upper right", fontsize=7)
+    handles, labels = axes[0].get_legend_handles_labels()
+    seen = {}
+    unique_handles, unique_labels = [], []
+    for h, lbl in zip(handles, labels):
+        if lbl not in seen:
+            seen[lbl] = True
+            unique_handles.append(h)
+            unique_labels.append(lbl)
+    fig.legend(
+        unique_handles, unique_labels, loc="lower center", ncol=3, fontsize=8,
+        bbox_to_anchor=(0.5, -0.08),
+    )
 
     plt.tight_layout()
     fig.savefig(
@@ -462,15 +489,18 @@ def plot_dimension_comparison_mcc(
         ax.set_ylim(-1.0, 1.0)
         ax.axhline(y=0, color="black", linestyle="-", alpha=0.4, linewidth=0.8)
 
-        handles, labels = ax.get_legend_handles_labels()
-        seen = {}
-        unique_handles, unique_labels = [], []
-        for h, lbl in zip(handles, labels):
-            if lbl not in seen:
-                seen[lbl] = True
-                unique_handles.append(h)
-                unique_labels.append(lbl)
-        ax.legend(unique_handles, unique_labels, loc="upper right", fontsize=7)
+    handles, labels = axes[0].get_legend_handles_labels()
+    seen = {}
+    unique_handles, unique_labels = [], []
+    for h, lbl in zip(handles, labels):
+        if lbl not in seen:
+            seen[lbl] = True
+            unique_handles.append(h)
+            unique_labels.append(lbl)
+    fig.legend(
+        unique_handles, unique_labels, loc="lower center", ncol=3, fontsize=8,
+        bbox_to_anchor=(0.5, -0.08),
+    )
 
     plt.tight_layout()
     fig.savefig(
@@ -539,15 +569,23 @@ def plot_cleaned_train_mcc(
         ax.set_ylim(-1.0, 1.0)
         ax.axhline(y=0, color="black", linestyle="-", alpha=0.4, linewidth=0.8)
 
-        handles, labels = ax.get_legend_handles_labels()
-        seen = {}
-        unique_handles, unique_labels = [], []
-        for h, lbl in zip(handles, labels):
-            if lbl not in seen:
-                seen[lbl] = True
-                unique_handles.append(h)
-                unique_labels.append(lbl)
-        ax.legend(unique_handles, unique_labels, loc="upper right", fontsize=7)
+    # Single shared legend below the figure
+    handles, labels = axes[0].get_legend_handles_labels()
+    seen = {}
+    unique_handles, unique_labels = [], []
+    for h, lbl in zip(handles, labels):
+        if lbl not in seen:
+            seen[lbl] = True
+            unique_handles.append(h)
+            unique_labels.append(lbl)
+    fig.legend(
+        unique_handles,
+        unique_labels,
+        loc="lower center",
+        ncol=3,
+        fontsize=8,
+        bbox_to_anchor=(0.5, -0.08),
+    )
 
     plt.tight_layout()
     fig.savefig(
