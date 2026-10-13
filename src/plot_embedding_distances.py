@@ -33,12 +33,12 @@ logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 log = logging.getLogger(__name__)
 
 PROJECTS = ["django", "calcite"]
-STRATEGIES = ["pairwise", "cumulative-fresh", "cumulative-carried"]
+STRATEGIES = ["pairwise", "cumulative-fresh"]
 
 # Strategy -> (display name, color, marker)
 STRATEGY_STYLE = {
     "pairwise": ("Pairwise", "#1f77b4", "o"),
-    "cumulative-fresh": ("Cumulative-fresh", "#ff7f0e", "s"),
+    "cumulative-fresh": ("Cumulative", "#ff7f0e", "s"),
     "cumulative-carried": ("Cumulative-carried", "#2ca02c", "^"),
 }
 
@@ -215,15 +215,14 @@ def plot_threshold_exceedance(
             alpha=0.85,
         )
 
-    ax.set_xlabel("Version Pair", fontsize=12)
-    ax.set_ylabel("% Files with Similarity >= 0.99", fontsize=12)
-    ax.set_title(
-        f"{PROJECT_TITLES[project]} — Near-Duplicate Rate per Version Pair",
-        fontsize=14,
-    )
+    ax.grid(axis="y", color="gray", linestyle="-", linewidth=0.5, alpha=0.5)
+    ax.set_axisbelow(True)
+    ax.set_xlabel("Version Pair", fontsize=16)
+    ax.set_ylabel("% Files with Similarity >= 0.99", fontsize=16)
     ax.set_xticks(x)
-    ax.set_xticklabels(all_pairs, fontsize=9)
-    ax.legend(fontsize=10)
+    ax.set_xticklabels(all_pairs, fontsize=13)
+    ax.tick_params(axis="y", labelsize=13)
+    ax.legend(fontsize=14)
 
     plt.tight_layout()
     path = output_dir / f"threshold_exceedance_{project}.{fmt}"
